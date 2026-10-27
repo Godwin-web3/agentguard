@@ -104,6 +104,10 @@ export class Store {
   }
   getPayment(id: string): PaymentRow | null { return (this.db.prepare("SELECT * FROM payments WHERE payment_id=?").get(id) as any) ?? null; }
   listPayments(limit = 200): PaymentRow[] { return this.db.prepare("SELECT * FROM payments ORDER BY created_at DESC LIMIT ?").all(limit) as any[]; }
+  /** Payments still in reserved or authorized that have not been updated since `olderThanIso`. */
+  listStuck(olderThanIso: string): PaymentRow[] {
+    return this.db.prepare(`SELECT * FROM payments WHERE status IN ('reserved','authorized') AND updated_at < ? ORDER BY updated_at`).all(olderThanIso) as any[];
+  }
   insertPayment(p: Omit<PaymentRow, "paypal_order_id" | "paypal_authorization_id" | "paypal_capture_id" | "error" | "created_at" | "updated_at">): void {
     const now = new Date().toISOString();
     this.db.prepare(`INSERT INTO payments (payment_id,mandate_id,agent_id,idempotency_key,proposal_hash,amount_minor,currency,status,evaluation,proposal,created_at,updated_at)
