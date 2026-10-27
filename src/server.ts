@@ -15,7 +15,12 @@ if (!ADMIN || ADMIN.length < 24) { console.error("Set AGENTGUARD_ADMIN_TOKEN (>=
 
 let paypal: PayPalClient | null = null;
 const pp = () => (paypal ??= new PayPalClient());
-const rail: PaymentRail = { authorize: i => pp().authorize(i), capture: (a, r) => pp().capture(a, r), void: a => pp().void(a) };
+const rail: PaymentRail = {
+  authorize: i => pp().authorize(i),
+  capture: (a, r) => pp().capture(a, r),
+  void: a => pp().void(a),
+  getAuthorization: a => pp().getAuthorization(a),
+};
 
 const risk: RiskAnalyzer = process.env.LLM_API_KEY
   ? new CompositeRiskAnalyzer(new HeuristicRiskAnalyzer(), new LLMRiskAnalyzer({ baseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
@@ -29,6 +34,17 @@ const CONSOLE_HTML = readFileSync(new URL("./console.html", import.meta.url), "u
 const store = new Store();
 const signer = Signer.load();
 const gw = new Gateway({ store, signer, risk, rail });
+
+// Crash recovery: converge any payments left in reserved/authorized after a restart or network drop.
+const RECOVER_INTERVAL_MS = Number(process.env.AGENTGUARD_RECOVER_INTERVAL_MS ?? 5 * 60_000);
+async function runRecover() {
+  try {
+    const r = await gw.reconcile();
+    if (r.scanned) console.log(`[recover] scanned=${r.scanned} actions=${r.actions.join(",") || "none"}`);
+  } catch (e) { console.error("[recover] failed", e); }
+}
+runRecover();
+setInterval(runRecover, RECOVER_INTERVAL_MS).unref();
 
 type Handler = (ctx: { req: IncomingMessage; body: any; params: string[]; query: URLSearchParams; agent?: { agent_id: string; user_id: string } }) => Promise<unknown> | unknown;
 const routes: { method: string; re: RegExp; auth: "admin" | "agent" | "none"; h: Handler }[] = [];
