@@ -30,18 +30,35 @@ Agentic commerce gives agents a live payment capability. Detection of prompt inj
 node >= 22.6 (no dependencies)
 export AGENTGUARD_ADMIN_TOKEN=$(openssl rand -hex 24)
 export PAYPAL_CLIENT_ID=... PAYPAL_CLIENT_SECRET=...      # sandbox app
-export LLM_API_KEY=...   # optional: enables LLM risk analysis (OpenAI-compatible; LLM_BASE_URL, LLM_MODEL)
-npm start      # gateway on :8787
+export LLM_API_KEY=...   # optional: LLM risk analysis + mandate drafting (OpenAI-compatible; LLM_BASE_URL, LLM_MODEL)
+npm start      # gateway + owner console on http://localhost:8787/console
 npm test       # threat-model test suite
 ```
 
 ### Flow
 1. `POST /v1/agents` → agent API key
 2. `POST /v1/wallets/setup` → PayPal consent URL (vault the buyer's wallet once)
-3. `POST /v1/mandates` → draft; user reviews; `POST /v1/mandates/:id/confirm {mandate_hash}` → signed, active
+3. `POST /v1/mandates/draft-from-text {user_id, agent_id, text}` (or structured `POST /v1/mandates`) → draft + plain-English summary; user reviews; `POST /v1/mandates/:id/confirm {mandate_hash}` → signed, active
 4. Agent: `POST /v1/agent/payments` or MCP `propose_payment`
 5. Escalations: `GET /v1/approvals`, `POST /v1/approvals/:id {approve}`
 6. `GET /v1/audit`, `GET /v1/audit/verify`
+
+### Owner console
+`/console` (admin token required): describe a mandate in plain English, review the code-rendered summary, sign it;
+approve or deny escalated payments from the inbox; browse mandates, payments and the hash-chained audit ledger in AG Grid;
+one-click chain verification.
+
+### Plain-English mandates, without trusting the model
+The AI only proposes. A deterministic parser reads the same sentence, and wherever both produce a limit the **tighter one wins**
+(disagreements are shown as warnings). Payees the model suggests that aren't in the user's text are dropped. Anything unstated
+defaults tight (1 payment, 60-minute expiry). The summary the user signs is rendered by code from the final constraints, never written
+by the model. See `test/drafter.test.ts` for a model that tries to raise a $900 cap to $9,000 and add an attacker payee.
+
+### Verified against PayPal sandbox
+`scripts/sandbox-smoke.sh` runs the live path end to end: register agent → link vaulted wallet → plain-English mandate → sign →
+in-policy payment (AUTHORIZE → verify → capture), off-allowlist payee (rejected, PayPal never called), over-threshold payment
+(held for approval, captured after approval), and prompt-injected context (held). Note: the sandbox merchant must be in a country
+that can receive PayPal payments (e.g. US); Nigerian business accounts cannot.
 
 ### MCP
 ```bash
