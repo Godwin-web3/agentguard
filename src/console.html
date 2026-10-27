@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentGuard Console</title>
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@36.2.0/dist/ag-grid-community.min.js"></script>
+<style>
+  :root { --bg:#0b0f14; --panel:#121821; --line:#223042; --text:#e6edf3; --mute:#8b98a8; --ok:#3fb950; --bad:#f85149; --warn:#d29922; --acc:#58a6ff; }
+  * { box-sizing:border-box } body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text) }
+  header { display:flex; gap:12px; align-items:center; padding:14px 20px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:5; flex-wrap:wrap }
+  header h1 { font-size:16px; margin:0 12px 0 0 } header h1 span { color:var(--acc) }
+  input, textarea, select { background:#0d131b; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit }
+  button { background:var(--acc); color:#04121f; border:0; border-radius:8px; padding:8px 14px; font-weight:600; cursor:pointer }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line) } button.bad { background:var(--bad); color:#fff } button.ok { background:var(--ok); color:#03140a }
+  button:disabled { opacity:.5; cursor:default }
+  main { display:grid; grid-template-columns: minmax(320px,420px) 1fr; gap:16px; padding:16px 20px }
+  @media (max-width: 900px) { main { grid-template-columns:1fr } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px }
+  section h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:0 0 10px; display:flex; justify-content:space-between; align-items:center }
+  .grid { height:300px } .col { display:flex; flex-direction:column; gap:16px }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line) }
+  .pill.ok { color:var(--ok); border-color:var(--ok) } .pill.bad { color:var(--bad); border-color:var(--bad) } .pill.warn { color:var(--warn); border-color:var(--warn) }
+  ul.sum { margin:8px 0; padding-left:18px } ul.sum li { margin:3px 0 } .warn { color:var(--warn) } .mute { color:var(--mute); font-size:12px }
+  .card { border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:10px } .card .row { display:flex; justify-content:space-between; gap:8px; align-items:center }
+  code { font-size:12px; color:var(--mute); word-break:break-all } .row2 { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px }
+  textarea { width:100%; min-height:84px; resize:vertical }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent<span>Guard</span> Console</h1>
+  <input id="token" type="password" placeholder="Admin token" style="min-width:260px">
+  <button id="connect">Connect</button>
+  <span id="conn" class="pill">not connected</span>
+  <span style="flex:1"></span>
+  <span id="chain" class="pill">audit chain: —</span>
+</header>
+<main>
+  <div class="col">
+    <section>
+      <h2>New mandate</h2>
+      <div class="row2" style="margin-top:0">
+        <input id="user" placeholder="user_id" value="demo-user" style="flex:1">
+        <input id="agent" placeholder="agent_id" value="shopper" style="flex:1">
+      </div>
+      <p class="mute">Say what the agent may buy. AI drafts it; you sign the exact limits.</p>
+      <textarea id="text" placeholder="Buy one laptop under $900 this week, only from store@bestlaptops.example. Ask me over $600."></textarea>
+      <div class="row2"><button id="draft">Draft mandate</button></div>
+      <div id="draftOut"></div>
+    </section>
+    <section>
+      <h2>Approval inbox <span id="apCount" class="pill">0</span></h2>
+      <div id="approvals" class="mute">No payments waiting on you.</div>
+    </section>
+  </div>
+  <div class="col">
+    <section><h2>Mandates</h2><div id="gMandates" class="grid"></div></section>
+    <section><h2>Payments</h2><div id="gPayments" class="grid"></div></section>
+    <section><h2>Audit ledger <button class="ghost" id="verify">Verify chain</button></h2><div id="gAudit" class="grid"></div></section>
+  </div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+let TOKEN = sessionStorage.getItem("ag_token") || ""; $("#token").value = TOKEN;
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { authorization: "Bearer " + TOKEN, "content-type": "application/json" } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+const pill = (v, map) => `<span class="pill ${map[v] || ""}">${esc(v)}</span>`;
+const statusMap = { active:"ok", captured:"ok", approve:"ok", draft:"warn", needs_human:"warn", pending_approval:"warn", authorized:"warn",
+  revoked:"bad", rejected:"bad", reject:"bad", voided:"bad", failed:"bad", expired:"bad", exhausted:"" };
+const cellPill = p => p.value == null ? "" : pill(p.value, statusMap);
+const when = p => p.value ? new Date(p.value).toLocaleString() : "";
+
+const grids = {};
+function grid(id, columnDefs, extra = {}) {
+  grids[id] = agGrid.createGrid(document.getElementById(id), { columnDefs, rowData: [], defaultColDef: { sortable: true, filter: true, resizable: true, flex: 1, minWidth: 90 },
+    animateRows: true, pagination: true, paginationAutoPageSize: true, theme: agGrid.themeQuartz.withPart(agGrid.colorSchemeDarkBlue), ...extra });
+}
+grid("gMandates", [
+  { field: "mandate.purpose", headerName: "Purpose", flex: 2, tooltipField: "mandate.purpose" },
+  { field: "status", cellRenderer: cellPill, maxWidth: 120 },
+  { headerName: "Spent", valueGetter: p => `${((p.data.spend?.spent_minor ?? 0) / 100).toFixed(2)} / ${p.data.mandate.constraints.max_total} ${p.data.mandate.constraints.currency}` },
+  { headerName: "Payments", valueGetter: p => `${p.data.spend?.tx_count ?? 0} / ${p.data.mandate.constraints.max_transactions}`, maxWidth: 110 },
+  { field: "mandate.agent_id", headerName: "Agent", maxWidth: 120 },
+  { field: "mandate.expires_at", headerName: "Expires", valueFormatter: when },
+  { headerName: "", maxWidth: 100, sortable: false, filter: false, cellRenderer: p => {
+      if (p.data.status !== "active" && p.data.status !== "draft") return "";
+      const b = document.createElement("button"); b.className = "bad"; b.textContent = "Revoke"; b.style.padding = "2px 10px";
+      b.onclick = async () => { if (!confirm("Revoke this mandate? Pending authorizations are voided.")) return;
+        await api(`/v1/mandates/${p.data.mandate.mandate_id}/revoke`, { method: "POST", body: JSON.stringify({ reason: "revoked in console" }) }); refresh(); };
+      return b; } },
+]);
+grid("gPayments", [
+  { field: "created_at", headerName: "Time", valueFormatter: when, sort: "desc" },
+  { field: "agent_id", headerName: "Agent", maxWidth: 120 },
+  { headerName: "Payee", valueGetter: p => p.data.proposal?.payee?.display_name || p.data.proposal?.payee?.email_address || p.data.proposal?.payee?.merchant_id },
+  { headerName: "Amount", valueGetter: p => `${(p.data.evaluation.amount_minor / 100).toFixed(2)} ${p.data.proposal.currency}`, maxWidth: 130 },
+  { field: "evaluation.decision", headerName: "Decision", cellRenderer: cellPill, maxWidth: 130 },
+  { field: "status", cellRenderer: cellPill, maxWidth: 130 },
+  { headerName: "Why", flex: 2, valueGetter: p => (p.data.evaluation.reasons || []).join("; ") || p.data.error || "all checks passed", tooltipValueGetter: p => p.value },
+  { field: "paypal_capture_id", headerName: "PayPal capture" },
+]);
+grid("gAudit", [
+  { field: "seq", headerName: "#", maxWidth: 80, sort: "desc" },
+  { field: "ts", headerName: "Time", valueFormatter: when },
+  { field: "event", headerName: "Event" },
+  { field: "ref", headerName: "Ref", flex: 2 },
+  { field: "hash", headerName: "Hash", valueFormatter: p => (p.value || "").slice(0, 16) + "…" },
+]);
+
+function renderApprovals(list) {
+  $("#apCount").textContent = list.length;
+  if (!list.length) { $("#approvals").innerHTML = '<span class="mute">No payments waiting on you.</span>'; return; }
+  $("#approvals").innerHTML = list.map(a => {
+    const p = a.proposal, e = a.evaluation, amt = (e.amount_minor / 100).toFixed(2);
+    const risk = (e.risk || []).map(r => `<li class="${r.severity === "high" ? "warn" : ""}">${esc(r.signal)}: ${esc(r.detail)}</li>`).join("");
+    return `<div class="card"><div class="row"><b>${esc(amt)} ${esc(p.currency)}</b> ${pill("needs_human", statusMap)}</div>
+      <div class="mute">to ${esc(p.payee.display_name || p.payee.email_address || p.payee.merchant_id)} · ${esc(p.items.map(i => i.quantity + "× " + i.name).join(", "))}</div>
+      <ul class="sum">${(e.reasons || []).map(r => `<li>${esc(r)}</li>`).join("")}${risk}</ul>
+      ${p.agent_rationale ? `<div class="mute">Agent says: “${esc(p.agent_rationale)}”</div>` : ""}
+      <div class="row2"><button class="ok" data-ap="${esc(a.approval_id)}" data-v="1">Approve</button><button class="bad" data-ap="${esc(a.approval_id)}" data-v="0">Deny</button>
+      <span class="mute">expires ${esc(new Date(a.expires_at).toLocaleTimeString())}</span></div></div>`;
+  }).join("");
+  document.querySelectorAll("[data-ap]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await api(`/v1/approvals/${b.dataset.ap}`, { method: "POST", body: JSON.stringify({ approve: b.dataset.v === "1", approver: "console" }) }); }
+    catch (e) { alert(e.message); } refresh();
+  });
+}
+
+$("#draft").onclick = async () => {
+  const out = $("#draftOut"); out.innerHTML = '<p class="mute">Drafting…</p>';
+  try {
+    const d = await api("/v1/mandates/draft-from-text", { method: "POST", body: JSON.stringify({ user_id: $("#user").value, agent_id: $("#agent").value, text: $("#text").value }) });
+    out.innerHTML = `<div class="card"><b>You're about to authorize</b><ul class="sum">${d.summary.map(s => `<li>${esc(s)}</li>`).join("")}</ul>
+      ${d.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}
+      <div class="mute">Drafted by ${esc(d.source)} · mandate hash</div><code>${esc(d.mandate_hash)}</code>
+      <div class="row2"><button class="ok" id="sign">Confirm &amp; sign</button><button class="ghost" id="discard">Discard</button></div></div>`;
+    $("#sign").onclick = async () => { await api(`/v1/mandates/${d.mandate.mandate_id}/confirm`, { method: "POST", body: JSON.stringify({ mandate_hash: d.mandate_hash }) });
+      out.innerHTML = '<p class="pill ok">Mandate signed and active.</p>'; refresh(); };
+    $("#discard").onclick = async () => { await api(`/v1/mandates/${d.mandate.mandate_id}/revoke`, { method: "POST", body: JSON.stringify({ reason: "discarded draft" }) }); out.innerHTML = ""; refresh(); };
+  } catch (e) { out.innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
+};
+
+$("#verify").onclick = async () => {
+  try { const v = await api("/v1/audit/verify"); $("#chain").className = "pill " + (v.ok ? "ok" : "bad");
+    $("#chain").textContent = v.ok ? `audit chain: intact (${v.length} entries)` : `audit chain: BROKEN at #${v.brokenAt}`; }
+  catch (e) { $("#chain").className = "pill bad"; $("#chain").textContent = e.message; }
+};
+
+async function refresh() {
+  if (!TOKEN) return;
+  try {
+    const [m, a, p, au] = await Promise.all([api("/v1/mandates"), api("/v1/approvals"), api("/v1/payments"), api("/v1/audit")]);
+    grids.gMandates.setGridOption("rowData", m); grids.gPayments.setGridOption("rowData", p); grids.gAudit.setGridOption("rowData", au);
+    renderApprovals(a); $("#conn").className = "pill ok"; $("#conn").textContent = "connected";
+  } catch (e) { $("#conn").className = "pill bad"; $("#conn").textContent = e.message; }
+}
+$("#connect").onclick = () => { TOKEN = $("#token").value.trim(); sessionStorage.setItem("ag_token", TOKEN); refresh().then(() => $("#verify").click()); };
+if (TOKEN) { refresh(); $("#verify").click(); }
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>
