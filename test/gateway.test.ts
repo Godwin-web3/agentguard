@@ -4,19 +4,35 @@ import { Store } from "../src/store.ts";
 import { Signer } from "../src/keys.ts";
 import { Gateway } from "../src/gateway.ts";
 import { HeuristicRiskAnalyzer } from "../src/risk.ts";
-import type { PaymentRail, AuthorizeInput } from "../src/paypal.ts";
+import type { PaymentRail, AuthorizeInput, AuthorizationState } from "../src/paypal.ts";
 import type { PaymentProposal } from "../src/types.ts";
 
 class FakeRail implements PaymentRail {
   calls: string[] = []; tamper?: (i: AuthorizeInput) => Partial<{ amountMinor: number; merchant: string }>;
+  authStates = new Map<string, AuthorizationState>();
   async authorize(i: AuthorizeInput) {
     this.calls.push(`authorize:${i.referenceId}`);
     const t = this.tamper?.(i) ?? {};
-    return { order_id: "O-" + i.referenceId, authorization_id: "A-" + i.referenceId, status: "CREATED",
+    const id = "A-" + i.referenceId;
+    this.authStates.set(id, { status: "CREATED", amountMinor: t.amountMinor ?? i.amountMinor, currency: i.currency });
+    return { order_id: "O-" + i.referenceId, authorization_id: id, status: "CREATED",
       observed: { currency: i.currency, amountMinor: t.amountMinor ?? i.amountMinor, payee: { merchant_id: t.merchant ?? i.payee.merchant_id } } };
   }
-  async capture(id: string) { this.calls.push(`capture:${id}`); return { capture_id: "C-" + id, status: "COMPLETED" }; }
-  async void(id: string) { this.calls.push(`void:${id}`); }
+  async capture(id: string) {
+    this.calls.push(`capture:${id}`);
+    const s = this.authStates.get(id) ?? { status: "CREATED" };
+    this.authStates.set(id, { ...s, status: "CAPTURED", capture_id: "C-" + id });
+    return { capture_id: "C-" + id, status: "COMPLETED" };
+  }
+  async void(id: string) {
+    this.calls.push(`void:${id}`);
+    const s = this.authStates.get(id) ?? { status: "CREATED" };
+    this.authStates.set(id, { ...s, status: "VOIDED" });
+  }
+  async getAuthorization(id: string): Promise<AuthorizationState> {
+    this.calls.push(`get:${id}`);
+    return this.authStates.get(id) ?? { status: "CREATED" };
+  }
 }
 
 function setup() {
@@ -132,4 +148,16 @@ test("API keys authenticate agents", () => {
   const k = gw.registerAgent("u1", "agent2");
   assert.equal(gw.authenticateAgent(k.api_key)?.agent_id, "agent2");
   assert.equal(gw.authenticateAgent("ag_wrong"), null);
+});
+
+test("reconcile finishes a payment left in authorized", async () => {
+  const { gw, store, rail, mid } = setup();
+  const r = await gw.propose("shopper", laptop(mid));
+  // Force it back to authorized as if we crashed after authorize but before capture.
+  store.transition(r.payment_id, ["captured"], "authorized");
+  store.db.prepare("UPDATE payments SET updated_at=? WHERE payment_id=?").run(new Date(Date.now() - 120_000).toISOString(), r.payment_id);
+  rail.authStates.set(`A-${r.payment_id}`, { status: "CREATED", amountMinor: 85000, currency: "USD" });
+  const rec = await gw.reconcile(60_000);
+  assert.ok(rec.actions.some(a => a.includes("captured")));
+  assert.equal(gw.view(r.payment_id).status, "captured");
 });
