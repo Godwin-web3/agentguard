@@ -178,6 +178,63 @@ export class Gateway {
     return this.view(pay.payment_id);
   }
 
+  /**
+   * Bring local state back in line with PayPal after a crash or network drop between authorize and capture.
+   * Safe to call repeatedly. Only touches payments older than olderThanMs.
+   */
+  async reconcile(olderThanMs = 60_000): Promise<{ scanned: number; actions: string[] }> {
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const stuck = this.store.listStuck(cutoff);
+    const actions: string[] = [];
+    for (const pay of stuck) {
+      try {
+        if (pay.status === "reserved" && !pay.paypal_authorization_id) {
+          // Never reached PayPal, or we died before recording the auth id. Release the hold.
+          if (this.store.transition(pay.payment_id, ["reserved"], "failed", { error: "recovery: never authorized" })) {
+            this.store.audit("payment.recovered_failed", pay.payment_id, { reason: "never authorized" });
+            actions.push(`${pay.payment_id}:failed_never_authorized`);
+          }
+          continue;
+        }
+        if (pay.status !== "authorized" || !pay.paypal_authorization_id) continue;
+
+        const remote = await this.rail.getAuthorization(pay.paypal_authorization_id);
+        const sm = this.store.getMandate(pay.mandate_id);
+        const mandateOk = sm && sm.status === "active" && new Date() < new Date(sm.mandate.expires_at);
+
+        if (remote.status === "CAPTURED") {
+          this.store.transition(pay.payment_id, ["authorized"], "captured", { paypal_capture_id: remote.capture_id ?? null });
+          this.store.audit("payment.recovered_captured", pay.payment_id, { remote_status: remote.status, capture_id: remote.capture_id });
+          actions.push(`${pay.payment_id}:synced_captured`);
+        } else if (remote.status === "VOIDED" || remote.status === "EXPIRED" || remote.status === "DENIED") {
+          this.store.transition(pay.payment_id, ["authorized"], "voided", { error: `recovery: PayPal ${remote.status}` });
+          this.store.audit("payment.recovered_voided", pay.payment_id, { remote_status: remote.status });
+          actions.push(`${pay.payment_id}:synced_voided`);
+        } else if (remote.status === "CREATED" || remote.status === "PENDING") {
+          if (!mandateOk) {
+            await this.rail.void(pay.paypal_authorization_id);
+            this.store.transition(pay.payment_id, ["authorized"], "voided", { error: "recovery: mandate no longer active" });
+            this.store.audit("payment.recovered_voided", pay.payment_id, { reason: "mandate inactive" });
+            actions.push(`${pay.payment_id}:voided_mandate_inactive`);
+          } else {
+            // Still authorized and mandate is good: finish the capture.
+            const cap = await this.rail.capture(pay.paypal_authorization_id, `ag-${pay.payment_id}-cap-recover`);
+            this.store.transition(pay.payment_id, ["authorized"], "captured", { paypal_capture_id: cap.capture_id });
+            this.store.audit("payment.recovered_captured", pay.payment_id, { capture_id: cap.capture_id });
+            actions.push(`${pay.payment_id}:captured`);
+          }
+        } else {
+          this.store.audit("payment.recover_unknown", pay.payment_id, { remote_status: remote.status });
+          actions.push(`${pay.payment_id}:unknown_${remote.status}`);
+        }
+      } catch (e) {
+        this.store.audit("payment.recover_error", pay.payment_id, { error: (e as Error).message.slice(0, 500) });
+        actions.push(`${pay.payment_id}:error`);
+      }
+    }
+    return { scanned: stuck.length, actions };
+  }
+
   /** The only code path that touches money. Authorize -> verify PayPal's view matches -> capture, else void. */
   private async execute(paymentId: string): Promise<void> {
     const pay = this.store.getPayment(paymentId)!;
