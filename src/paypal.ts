@@ -10,6 +10,15 @@ export interface PaymentRail {
   authorize(input: AuthorizeInput): Promise<AuthorizeResult>;
   capture(authorizationId: string, requestId: string): Promise<{ capture_id: string; status: string }>;
   void(authorizationId: string): Promise<void>;
+  /** Current state of an authorization. Used by recovery after process death between authorize and capture. */
+  getAuthorization(authorizationId: string): Promise<AuthorizationState>;
+}
+
+export interface AuthorizationState {
+  status: string;                 // CREATED | CAPTURED | VOIDED | EXPIRED | DENIED | ...
+  amountMinor?: number;
+  currency?: string;
+  capture_id?: string;
 }
 
 export interface AuthorizeInput {
@@ -103,4 +112,14 @@ export class PayPalClient implements PaymentRail {
     return { capture_id: j.id, status: j.status };
   }
   async void(authorizationId: string) { await this.call("POST", `/v2/payments/authorizations/${authorizationId}/void`); }
+  async getAuthorization(authorizationId: string): Promise<AuthorizationState> {
+    const j = await this.call("GET", `/v2/payments/authorizations/${authorizationId}`);
+    const [w, f = "0"] = String(j.amount?.value ?? "0").split(".");
+    return {
+      status: j.status,
+      amountMinor: Number(w) * 100 + Number((f + "00").slice(0, 2)),
+      currency: j.amount?.currency_code,
+      capture_id: j.links?.find((l: any) => l.rel === "capture")?.href?.split("/").pop(),
+    };
+  }
 }
