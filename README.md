@@ -1,13 +1,42 @@
 # AgentGuard
 
-**Financial authorization for AI agents that pay through PayPal.**
-An agent can browse, reason and recommend. It cannot spend outside the authority its user delegated, even if it is fully compromised by prompt injection.
+**Dispute-proof agent purchases on PayPal.**
+When an AI agent pays a merchant, AgentGuard hands both sides a signed **Proof-of-Intent receipt**: cryptographic evidence that *the user* authorized *this exact order*, checked by a deterministic policy, and that this is the capture PayPal settled. The merchant verifies it offline, with no dependency on AgentGuard, using [`@agentguard/intent-verifier`](packages/intent-verifier).
+
+Underneath, AgentGuard is financial authorization for agents: an agent can browse, reason and recommend, but it cannot spend outside the authority its user delegated, even if it is fully compromised by prompt injection.
+
+## Proof-of-Intent receipts
+Every payment captured against a merchant's PayPal order gets a receipt (`agentguard.proof-of-intent/v1`): canonical JSON plus a detached Ed25519 signature. It binds:
+
+| Section | What it proves |
+|---|---|
+| `mandate` | The mandate body, its hash, and the user's **WebAuthn assertion** over that hash, with credential ID and COSE public key. Verifiable without the server. |
+| `order` | The exact PayPal order snapshot (payee, amount, currency, items/SKUs) the decision was made on, and its digest. |
+| `decision` | Policy outcome, rule results, agent ID, idempotency key and the proposal hash binding mandate + agent + order. |
+| `approval` | Any human approval: who, when, and the audit entry that recorded it. |
+| `payment` | Authorization ID, capture ID, capture status, amount, timestamps, and the `AGPOI-<receipt_id>` reference written on the PayPal capture as `invoice_id`. |
+| `audit` | Sequence number and hash of the capture entry in the hash-chained audit log. |
+
+Get it via `GET /v1/agent/payments/:id/receipt` (agent), `GET /v1/payments/:id/receipt` / `GET /v1/receipts/:id` (admin), the MCP tool `get_payment_receipt`, or, if `AGENTGUARD_PUBLIC_RECEIPTS=1`, `GET /v1/public/receipts/:id`. The issuer key is published at `/.well-known/agentguard-key`.
+
+```sh
+intent-verify receipt.json --issuer-key issuer-key.json --payee you@shop.example   # offline
+PAYPAL_CLIENT_ID=… PAYPAL_CLIENT_SECRET=… intent-verify receipt.json --issuer-key issuer-key.json --paypal  # + live re-check with your own keys
+intent-verify evidence receipt.json --out evidence/ [--submit PP-D-…]                # PayPal provide-evidence package (PDF + input JSON)
+```
+
+Tampered receipts, swapped orders, forged mandates and wrong issuer keys all fail (`test/receipts.test.ts`). Live sandbox run: `scripts/sandbox-receipt.sh`.
+
+**What a receipt is not.** It is *evidence*, not a guaranteed dispute or chargeback win: PayPal and card networks decide disputes on their own rules, and "item not received" or "not as described" claims are about fulfilment, which no payment receipt proves. Be precise about what is attested by whom:
+- The passkey signature over the mandate, and the order/mandate match, are checked independently by the verifier. Everything else (decision, approvals, cumulative spend across payments, audit position) is **attested by the issuer key**, so **pin that key** (`--issuer-key`) rather than trusting the one embedded in the receipt.
+- Human approvals today are authenticated with the operator's admin token, not a passkey (`approval.method: "admin_token"`).
+- The passkey proves the *holder of that credential* signed the mandate; binding the credential to a real person is the enrollment step's job.
 
 ## Why
 Agentic commerce gives agents a live payment capability. Detection of prompt injection is probabilistic; money movement must not be. AgentGuard separates *proposing* a payment from *having the authority to execute it*:
 
 - Agents never hold PayPal credentials. They hold an AgentGuard key and call `propose_payment` (HTTP or MCP).
-- Every proposal is checked by a **deterministic policy engine** against a spending mandate **signed by the user's own passkey** (WebAuthn, in the spirit of AP2 intent mandates). The server holds no key that can authorize spending; its Ed25519 key only signs audit attestations.
+- Every proposal is checked by a **deterministic policy engine** against a spending mandate **signed by the user's own passkey** (WebAuthn, in the spirit of AP2 intent mandates). The server holds no key that can authorize spending; its Ed25519 key only signs audit attestations and Proof-of-Intent receipts.
 - AI risk analysis is **advisory only**: it can escalate a passing payment to a human, never approve a failing one.
 - Execution uses PayPal Orders v2 **`intent: AUTHORIZE`** against the user's vaulted PayPal wallet, verifies PayPal's own view of amount, currency and payee, then **captures**, or **voids** on any mismatch or revocation.
 - Every decision lands in a **hash-chained, append-only audit log**.

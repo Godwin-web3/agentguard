@@ -4,4 +4,5 @@ data/
 *.pem
 .env
 .env.*
+dist/
 packages/*/dist/
