@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { buildOpenApi, ENDPOINTS } from "../docs/openapi.mjs";
 
 export const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const slugify = s => s.toLowerCase().replace(/<[^>]+>/g, "").replace(/&[a-z]+;/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+const stripTags = s => s.replace(/<[^>]*>/g, "").replace(/[<>]/g, "");
+const slugify = s => stripTags(s.toLowerCase()).replace(/&[a-z]+;/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const COPY = '<button class="btn" type="button" data-copy style="margin-left:auto" aria-label="Copy code"><svg class="i i-sm"><use href="/brand/icons.svg#i-copy"/></svg><span>Copy</span></button>';
 
 export function loadDocs(root) {
@@ -62,7 +63,7 @@ function render(md) {
     },
     heading({ tokens, depth }) {
       const html = this.parser.parseInline(tokens), id = slugify(html);
-      if (depth === 2 || depth === 3) toc.push({ id, depth, text: html.replace(/<[^>]+>/g, "") });
+      if (depth === 2 || depth === 3) toc.push({ id, depth, text: stripTags(html) });
       return `<h${depth} id="${id}"><a class="anchor" href="#${id}" aria-hidden="true">#</a>${html}</h${depth}>\n`;
     },
     link({ href, title, tokens }) {

@@ -24,6 +24,7 @@ const specOps = new Set(Object.entries(spec.paths).flatMap(([p, ops]: any) => Ob
 
 test("OpenAPI 3.1 spec covers exactly the app's routes", async () => {
   assert.equal(spec.openapi, "3.1.0");
+  process.env.AGENTGUARD_ADMIN_TOKEN ??= "docs-test-admin-token-0123456789";
   const app = await createApp({ background: false });
   const routes = new Set(app.routes().map(r => `${r.method} ${toPath(r.path)}`));
   const missing = [...routes].filter(r => !specOps.has(r)), extra = [...specOps].filter(r => !routes.has(r));
