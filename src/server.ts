@@ -35,13 +35,31 @@ const store = new Store();
 const signer = Signer.load();
 const gw = new Gateway({ store, signer, risk, rail });
 
+// Per-agent sliding window on propose. Stops a compromised agent from flooding the gateway.
+const RATE_LIMIT = Number(process.env.AGENTGUARD_AGENT_RATE_LIMIT ?? 30);
+const RATE_WINDOW_MS = 60_000;
+const rateBuckets = new Map<string, number[]>();
+function checkRate(agentId: string): boolean {
+  const now = Date.now();
+  const window = (rateBuckets.get(agentId) ?? []).filter(t => now - t < RATE_WINDOW_MS);
+  if (window.length >= RATE_LIMIT) return false;
+  window.push(now);
+  rateBuckets.set(agentId, window);
+  return true;
+}
+
 // Crash recovery: converge any payments left in reserved/authorized after a restart or network drop.
 const RECOVER_INTERVAL_MS = Number(process.env.AGENTGUARD_RECOVER_INTERVAL_MS ?? 5 * 60_000);
+let lastRecovery: { at: string; scanned: number; actions: string[]; error?: string } | null = null;
 async function runRecover() {
   try {
     const r = await gw.reconcile();
+    lastRecovery = { at: new Date().toISOString(), scanned: r.scanned, actions: r.actions };
     if (r.scanned) console.log(`[recover] scanned=${r.scanned} actions=${r.actions.join(",") || "none"}`);
-  } catch (e) { console.error("[recover] failed", e); }
+  } catch (e) {
+    lastRecovery = { at: new Date().toISOString(), scanned: 0, actions: [], error: (e as Error).message };
+    console.error("[recover] failed", e);
+  }
 }
 runRecover();
 setInterval(runRecover, RECOVER_INTERVAL_MS).unref();
@@ -52,7 +70,10 @@ const route = (method: string, path: string, auth: "admin" | "agent" | "none", h
   routes.push({ method, re: new RegExp("^" + path.replace(/:\w+/g, "([^/]+)") + "$"), auth, h });
 
 // ---- public ----
-route("GET", "/health", "none", () => ({ ok: true }));
+route("GET", "/health", "none", () => {
+  const stuck = store.listStuck(new Date(Date.now() - 60_000).toISOString()).length;
+  return { ok: stuck === 0 && !lastRecovery?.error, stuck, last_recovery: lastRecovery };
+});
 route("GET", "/.well-known/agentguard-key", "none", () => ({ alg: "Ed25519", public_key_pem: signer.publicKeyPem() }));
 
 // ---- owner (the human delegating authority) ----
@@ -104,7 +125,10 @@ route("GET", "/v1/agent/mandates/:id", "agent", ({ params, agent }) => {
   if (v.mandate.agent_id !== agent!.agent_id) throw new GatewayError(404, "mandate not found");
   return { mandate: v.mandate, status: v.status, spend: v.spend };
 });
-route("POST", "/v1/agent/payments", "agent", ({ body, agent }) => gw.propose(agent!.agent_id, body));
+route("POST", "/v1/agent/payments", "agent", ({ body, agent }) => {
+  if (!checkRate(agent!.agent_id)) throw new GatewayError(429, "rate limit exceeded");
+  return gw.propose(agent!.agent_id, body);
+});
 route("GET", "/v1/agent/payments/:id", "agent", ({ params, agent }) => {
   const v = gw.view(params[0]); const row = store.getPayment(params[0]);
   if (!row || row.agent_id !== agent!.agent_id) throw new GatewayError(404, "payment not found");

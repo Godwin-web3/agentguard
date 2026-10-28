@@ -57,6 +57,7 @@
   <div class="col">
     <section><h2>Mandates</h2><div id="gMandates" class="grid"></div></section>
     <section><h2>Payments</h2><div id="gPayments" class="grid"></div></section>
+    <section><h2>Stuck <span id="stuckCount" class="pill">0</span> <button class="ghost" id="recover">Recover now</button></h2><div id="gStuck" class="grid"></div></section>
     <section><h2>Audit ledger <button class="ghost" id="verify">Verify chain</button></h2><div id="gAudit" class="grid"></div></section>
   </div>
 </main>
@@ -105,6 +106,14 @@ grid("gPayments", [
   { headerName: "Why", flex: 2, valueGetter: p => (p.data.evaluation.reasons || []).join("; ") || p.data.error || "all checks passed", tooltipValueGetter: p => p.value },
   { field: "paypal_capture_id", headerName: "PayPal capture" },
 ]);
+grid("gStuck", [
+  { field: "updated_at", headerName: "Updated", valueFormatter: when, sort: "asc" },
+  { field: "payment_id", headerName: "Payment", flex: 2 },
+  { field: "status", cellRenderer: cellPill, maxWidth: 130 },
+  { headerName: "Amount", valueGetter: p => `${(p.data.amount_minor / 100).toFixed(2)} ${p.data.currency}`, maxWidth: 130 },
+  { field: "paypal_authorization_id", headerName: "Auth id" },
+  { field: "error", headerName: "Error", flex: 2 },
+]);
 grid("gAudit", [
   { field: "seq", headerName: "#", maxWidth: 80, sort: "desc" },
   { field: "ts", headerName: "Time", valueFormatter: when },
@@ -147,6 +156,15 @@ $("#draft").onclick = async () => {
   } catch (e) { out.innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
 };
 
+$("#recover").onclick = async () => {
+  if (!confirm("Run recovery now for payments older than 60s?")) return;
+  try {
+    const r = await api("/v1/recover", { method: "POST", body: JSON.stringify({ older_than_ms: 60000 }) });
+    alert(`Scanned ${r.scanned}. Actions: ${r.actions.join(", ") || "none"}`);
+    refresh();
+  } catch (e) { alert(e.message); }
+};
+
 $("#verify").onclick = async () => {
   try { const v = await api("/v1/audit/verify"); $("#chain").className = "pill " + (v.ok ? "ok" : "bad");
     $("#chain").textContent = v.ok ? `audit chain: intact (${v.length} entries)` : `audit chain: BROKEN at #${v.brokenAt}`; }
@@ -156,8 +174,11 @@ $("#verify").onclick = async () => {
 async function refresh() {
   if (!TOKEN) return;
   try {
-    const [m, a, p, au] = await Promise.all([api("/v1/mandates"), api("/v1/approvals"), api("/v1/payments"), api("/v1/audit")]);
+    const [m, a, p, au, stuck] = await Promise.all([api("/v1/mandates"), api("/v1/approvals"), api("/v1/payments"), api("/v1/audit"), api("/v1/payments/stuck")]);
     grids.gMandates.setGridOption("rowData", m); grids.gPayments.setGridOption("rowData", p); grids.gAudit.setGridOption("rowData", au);
+    grids.gStuck.setGridOption("rowData", stuck);
+    $("#stuckCount").textContent = stuck.length;
+    $("#stuckCount").className = "pill " + (stuck.length ? "warn" : "ok");
     renderApprovals(a); $("#conn").className = "pill ok"; $("#conn").textContent = "connected";
   } catch (e) { $("#conn").className = "pill bad"; $("#conn").textContent = e.message; }
 }
