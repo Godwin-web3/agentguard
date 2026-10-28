@@ -13,12 +13,15 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { createPrivateKey } from "node:crypto";
 import { chromium } from "playwright-core";
-const BASE = process.env.AGENTGUARD_URL ?? "http://localhost:8787", TOKEN = process.env.AGENTGUARD_ADMIN_TOKEN!;
+const BASE = process.env.AGENTGUARD_BROWSER_URL ?? process.env.AGENTGUARD_URL ?? "http://localhost:8787", TOKEN = process.env.AGENTGUARD_ADMIN_TOKEN!;
 const USER = process.env.USER_ID ?? process.env.USER_NAME ?? "demo-user", APPROVAL = process.env.APPROVAL_ID!;
 if (!TOKEN || !APPROVAL) { console.error("need AGENTGUARD_ADMIN_TOKEN and APPROVAL_ID"); process.exit(2); }
 const file = `./data/dev-passkey-${USER.replace(/[^\w.-]/g, "_")}.json`;
 const dev = JSON.parse(readFileSync(file, "utf8"));
-const api = async (m: string, p: string) => (await fetch(BASE + p, { method: m, headers: { authorization: `Bearer ${TOKEN}` } })).json() as any;
+// Behind Vercel Deployment Protection: AGENTGUARD_API_URL is an authenticated proxy for the API calls, and
+// VERCEL_SHARE_URL (a share link) is opened first so the browser gets the protection cookie.
+const API = process.env.AGENTGUARD_API_URL ?? BASE;
+const api = async (m: string, p: string) => (await fetch(API + p, { method: m, headers: { authorization: `Bearer ${TOKEN}` } })).json() as any;
 
 const browser = await chromium.launch({ executablePath: process.env.CHROME ?? "/usr/bin/google-chrome", headless: true });
 try {
@@ -32,6 +35,7 @@ try {
     privateKey: createPrivateKey(dev.pem).export({ type: "pkcs8", format: "der" }).toString("base64"), signCount: dev.counter } });
   const dialogs: string[] = [];
   page.on("dialog", d => { dialogs.push(d.type() + ": " + d.message().split("\n")[0]); void d.accept(); });
+  if (process.env.VERCEL_SHARE_URL) await page.goto(process.env.VERCEL_SHARE_URL);
   await page.goto(BASE + "/console");
   await page.fill("#token", TOKEN); await page.click("#connect");
   await page.fill("#user", USER); await page.dispatchEvent("#user", "change");
