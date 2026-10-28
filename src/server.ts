@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { Store } from "./store.ts";
-import { Signer } from "./keys.ts";
+import { KeyRing } from "./keys.ts";
 import { ReceiptService, keyId } from "./receipt.ts";
 import { Gateway, GatewayError } from "./gateway.ts";
 import { PasskeyService } from "./passkeys.ts";
@@ -33,7 +33,7 @@ const store = new Store();
 const WALLET_SETUP_TTL_MS = 30 * 60 * 1000;
 store.db.exec("CREATE TABLE IF NOT EXISTS wallet_setups (state TEXT PRIMARY KEY, user_id TEXT NOT NULL, setup_token_id TEXT NOT NULL, expires_at TEXT NOT NULL)");
 // The server key signs audit-log attestations only. Mandates and revocations are signed by the user's passkey.
-const signer = Signer.load();
+const signer = KeyRing.load();
 const RP_ID = process.env.AGENTGUARD_RP_ID ?? new URL(PUBLIC_URL).hostname;
 const passkeys = new PasskeyService(store, { rpID: RP_ID, rpName: process.env.AGENTGUARD_RP_NAME ?? "AgentGuard", origin: new URL(PUBLIC_URL).origin });
 const receipts = new ReceiptService({ store, signer, passkeys, issuer: process.env.AGENTGUARD_ISSUER_NAME ?? new URL(PUBLIC_URL).host });
@@ -80,8 +80,11 @@ route("GET", "/health", "none", () => {
   const stuck = store.listStuck(new Date(Date.now() - 60_000).toISOString()).length;
   return { ok: stuck === 0 && !lastRecovery?.error, stuck, last_recovery: lastRecovery };
 });
+// Legacy single-key endpoint: the currently active issuer key. Prefer the key set below.
 route("GET", "/.well-known/agentguard-key", "none", () => ({ alg: "Ed25519", use: ["audit-attestation", "proof-of-intent-receipt"],
-  key_id: keyId(signer.publicKeyPem()), public_key_pem: signer.publicKeyPem() }));
+  key_id: keyId(signer.publicKeyPem()), public_key_pem: signer.publicKeyPem(), key_set: "/.well-known/agentguard-keys" }));
+// JWKS-style issuer key set with lifecycle: verifiers pin by kid; retired keys stay listed for receipts they signed earlier.
+route("GET", "/.well-known/agentguard-keys", "none", () => ({ issuer: receipts.issuer, ...signer.jwks() }));
 route("GET", "/v1/public/receipts/:id", "none", ({ params }) => {
   if (!PUBLIC_RECEIPTS) throw new GatewayError(404, "public receipts are disabled (AGENTGUARD_PUBLIC_RECEIPTS=1)");
   const r = receipts.get(decodeURIComponent(params[0])); if (!r) throw new GatewayError(404, "receipt not found"); return r;
@@ -120,10 +123,22 @@ route("POST", "/v1/mandates/draft-from-text", "admin", async ({ body }) => {
   const m = gw.draftMandate({ user_id: req(body, "user_id"), agent_id: req(body, "agent_id"), purpose: d.purpose, constraints: d.constraints, ttl_minutes: d.ttl_minutes });
   return { ...m, summary: d.summary, warnings: d.warnings, source: d.source };
 });
-// Passkeys: one per user, created from the owner console (navigator.credentials.create).
-route("GET", "/v1/users/:id/passkey", "admin", ({ params }) => { const c = passkeys.credentialFor(params[0]); return { registered: !!c, credential_id: c?.credential_id ?? null }; });
-route("POST", "/v1/users/:id/passkey/options", "admin", ({ params }) => pkCall(() => passkeys.registrationOptions(params[0])));
-route("POST", "/v1/users/:id/passkey", "admin", ({ params, body }) => pkCall(() => passkeys.verifyRegistration(params[0], body?.response)));
+// Passkeys: one per user. Registration needs a single-use enrollment token (no trust-on-first-use).
+route("GET", "/v1/users/:id/passkey", "admin", ({ params }) => { const c = passkeys.credentialFor(params[0]);
+  return { registered: !!c, credential_id: c?.credential_id ?? null, enrollment: passkeys.enrollmentFor(params[0]) }; });
+// Admin issues an enrollment link (first passkey, or a logged replacement). Only its sha256 is stored.
+route("POST", "/v1/users/:id/enrollments", "admin", ({ params, body }) => {
+  const t = passkeys.issueEnrollment(params[0], { issuedBy: body?.issued_by ?? "admin", ttlMs: body?.ttl_minutes ? Number(body.ttl_minutes) * 60_000 : undefined });
+  return { ...t, link: `${PUBLIC_URL}/console#enroll=${t.token}` };
+});
+// Replacement authorized by the user's existing passkey instead of the admin.
+route("POST", "/v1/users/:id/reenroll-request", "admin", ({ params }) => pkCall(() => passkeys.reenrollRequest(params[0])));
+route("POST", "/v1/users/:id/reenroll", "admin", async ({ params, body }) => {
+  const t = await pkCall(() => passkeys.reenroll(params[0], body?.assertion)); return { ...t, link: `${PUBLIC_URL}/console#enroll=${t.token}` };
+});
+// Redeeming: the token is the credential, so these need no admin token (the enrollee may not be the operator).
+route("POST", "/v1/enroll/options", "none", ({ body }) => pkCall(() => passkeys.registrationOptions(req(body, "token"))));
+route("POST", "/v1/enroll", "none", ({ body }) => pkCall(() => passkeys.verifyRegistration(req(body, "token"), body?.response)));
 // Mandate activation and revocation: the user's passkey signs; the admin token alone cannot do either.
 route("POST", "/v1/mandates/:id/sign-request", "admin", ({ params }) => gw.signingRequest(params[0]));
 route("POST", "/v1/mandates/:id/confirm", "admin", ({ params, body }) => gw.confirmMandate(params[0], req(body, "mandate_hash"), body?.assertion));
@@ -132,7 +147,11 @@ route("POST", "/v1/mandates/:id/revoke", "admin", async ({ params, body }) => { 
 route("GET", "/v1/mandates", "admin", () => store.listMandates().map(m => ({ ...m, spend: store.spendState(m.mandate.mandate_id), summary: summarize(m.mandate.constraints) })));
 route("GET", "/v1/mandates/:id", "admin", ({ params }) => gw.mandateView(params[0]));
 route("GET", "/v1/approvals", "admin", () => store.pendingApprovals().map(a => ({ ...a, proposal: JSON.parse(a.proposal), evaluation: JSON.parse(a.evaluation) })));
-route("POST", "/v1/approvals/:id", "admin", ({ params, body }) => gw.resolveApproval(params[0], body?.approve === true, body?.approver ?? "owner"));
+// Human decisions are signed by the user's passkey over {payment, order, amount, decision, nonce, expiry}.
+route("POST", "/v1/approvals/:id/request", "admin", ({ params, body }) => gw.approvalRequest(params[0], body?.approve === true));
+route("POST", "/v1/approvals/:id", "admin", ({ params, body }) => gw.resolveApproval(params[0], body?.approve === true, body?.assertion, String(body?.approver ?? "owner").slice(0, 100)));
+// Issuer key rotation (also: scripts/rotate-key.ts while the server is stopped). Old keys stay published.
+route("POST", "/v1/keys/rotate", "admin", () => { const r = signer.rotate(); store.audit("issuer.key_rotated", null, r); return { ...r, ...signer.jwks() }; });
 route("GET", "/v1/payments", "admin", ({ query }) => store.listPayments(Number(query.get("limit") ?? 200)).map(p => ({ ...p, evaluation: JSON.parse(p.evaluation), proposal: JSON.parse(p.proposal) })));
 route("GET", "/v1/receipts", "admin", ({ query }) => receipts.list(Number(query.get("limit") ?? 100)));
 route("GET", "/v1/receipts/:id", "admin", ({ params }) => {
@@ -161,7 +180,7 @@ route("GET", "/v1/audit/attestation", "admin", () => {
   const head = store.auditLog(1)[0];
   const statement = { v: 1, kind: "agentguard.audit.checkpoint", seq: head?.seq ?? 0, head_hash: head?.hash ?? "GENESIS",
     chain_ok: store.verifyAuditChain().ok, at: new Date().toISOString() };
-  return { statement, signature: signer.sign(canonical(statement)), alg: "Ed25519", key: "/.well-known/agentguard-key" };
+  return { statement, signature: signer.sign(canonical(statement)), alg: "Ed25519", kid: signer.activeKid(), key: "/.well-known/agentguard-keys" };
 });
 
 // ---- agent (holds only its own API key; never PayPal credentials) ----

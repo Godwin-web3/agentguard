@@ -4,6 +4,7 @@ import { ReceiptService } from "../../src/receipt.ts";
 import { Signer } from "../../src/keys.ts";
 import { HeuristicRiskAnalyzer } from "../../src/risk.ts";
 import { enrol, signer } from "./passkey.ts";
+export { approver } from "./passkey.ts";
 import type { PaymentRail, AuthorizeInput, AuthorizationState, AuthorizeResult } from "../../src/paypal.ts";
 import type { MandateConstraints } from "../../src/types.ts";
 export const MERCHANT = { merchant_id: "M32J3M4A7KASQ", email_address: "store@business.example.com" };
@@ -32,10 +33,10 @@ export class OrderRail implements PaymentRail {
   async getAuthorization(id: string) { return this.auths.get(id) ?? { status: "CREATED" }; }
 }
 
-export async function setup(c: Partial<MandateConstraints> = {}) {
+export async function setup(c: Partial<MandateConstraints> = {}, o: { issuer?: any } = {}) {
   const store = new Store(":memory:"); const rail = new OrderRail();
   const { passkeys, auths } = await enrol(store);
-  const issuer = Signer.ephemeral();
+  const issuer = o.issuer ?? Signer.ephemeral();
   const receipts = new ReceiptService({ store, signer: issuer, passkeys, issuer: "test-issuer" });
   const gw = new Gateway({ store, passkeys, risk: new HeuristicRiskAnalyzer(), rail, receipts });
   gw.linkWallet("u1", "VAULT-1"); gw.registerAgent("u1", "shopper");
@@ -43,6 +44,6 @@ export async function setup(c: Partial<MandateConstraints> = {}) {
     constraints: { currency: "USD", max_total: "200.00", max_transactions: 3, payee_allowlist: [MERCHANT.email_address], require_merchant_order: true,
       sku_allowlist: ["STAND-1", "CHARGER-65W"], allowed_categories: ["PHYSICAL_GOODS"], max_quantity_per_item: 2, ...c } });
   await signer(gw, auths)(d.mandate.mandate_id, d.mandate_hash);
-  return { gw, rail, store, mid: d.mandate.mandate_id, receipts, issuer, passkeys };
+  return { gw, rail, store, mid: d.mandate.mandate_id, receipts, issuer, passkeys, auths };
 }
 export const pay = (mid: string, id: string, key = "k-" + id) => ({ mandate_id: mid, agent_id: "shopper", idempotency_key: key, paypal_order_id: id });

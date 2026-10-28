@@ -5,7 +5,7 @@ import { writeFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isoCBOR } from "@simplewebauthn/server/helpers";
-import { setup, pay, order } from "./support/orders.ts";
+import { setup, pay, order, approver } from "./support/orders.ts";
 import { SoftAuthenticator } from "./support/softauth.ts";
 import { Signer } from "../src/keys.ts";
 import { canonical, sha256 } from "../src/canonical.ts";
@@ -112,15 +112,16 @@ test("forged mandate fails: edited limits, a recomputed hash, or another passkey
 });
 
 test("approval-held payment: receipt records the human approval; denied payments get no receipt", async () => {
-  const { gw, rail, mid, receipts, issuer } = await setup({ require_human_approval_over: "20.00" });
+  const { gw, rail, mid, receipts, issuer, auths } = await setup({ require_human_approval_over: "20.00" });
   rail.orders.set("ORDERPOI009", order("ORDERPOI009", [STAND]));
   const r = await gw.propose("shopper", pay(mid, "ORDERPOI009"));
   assert.equal(r.status, "needs_human"); assert.equal(receipts.forPayment(r.payment_id), null);
-  await gw.resolveApproval(r.approval_id!, true, "owner");
+  await approver(gw, auths, r.approval_id!, true, "owner");
   const env = receipts.forPayment(r.payment_id)!;
   assert.equal(env.receipt.approval.resolution, "approved"); assert.equal(env.receipt.approval.approver, "owner");
   const v = await verifyReceipt(env, { issuerPublicKeyPem: issuer.publicKeyPem() });
-  assert.equal(v.ok, true, JSON.stringify(failed(v))); assert.ok(v.warnings.some(w => /admin_token/.test(w)));
+  assert.equal(v.ok, true, JSON.stringify(failed(v))); assert.equal(env.receipt.approval.method, "passkey");
+  assert.ok(v.checks.some(c => c.check === "approval.passkey.signature" && c.pass)); assert.ok(!v.warnings.some(w => /admin_token/.test(w)));
 
   rail.orders.set("ORDERPOIBAD", order("ORDERPOIBAD", [{ ...STAND, sku: "NOPE" }]));
   const d = await gw.propose("shopper", pay(mid, "ORDERPOIBAD"));

@@ -12,6 +12,8 @@ const USAGE = `intent-verify: verify an AgentGuard Proof-of-Intent receipt, offl
 
 Options:
   --issuer-key <pem file>   AgentGuard issuer public key to trust (from /.well-known/agentguard-key)
+  --issuer-keys <json file> AgentGuard issuer key set to pin by kid (from /.well-known/agentguard-keys)
+  --allow-admin-approval    accept legacy receipts whose human approval was not passkey-signed
   --origin <url>            accepted WebAuthn origin for the user's passkey (repeatable)
   --payee <id>              your PayPal merchant id or email; the order must pay it (repeatable)
   --paypal                  also re-fetch the order/capture from PayPal using PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET
@@ -25,7 +27,8 @@ async function main(argv: string[]) {
   const one = (n: string) => many(n)[0];
   if (flag("--help") || flag("-h") || !args.length) { console.log(USAGE); return 0; }
   const evidence = args[0] === "evidence"; if (evidence) args.shift();
-  const json = flag("--json"), live = flag("--paypal");
+  const json = flag("--json"), live = flag("--paypal"), allowAdmin = flag("--allow-admin-approval");
+  const keysFile = one("--issuer-keys");
   const keyFile = one("--issuer-key"), origins = many("--origin"), payees = many("--payee");
   const out = one("--out"), submit = one("--submit"), evType = one("--evidence-type");
   if (args[0] === "ap2") { const e = JSON.parse(readFileSync(args[1], "utf8")); if (!e?.receipt?.ap2) { console.error("receipt has no AP2 views"); return 1; } console.log(JSON.stringify(e.receipt.ap2, null, 2)); return 0; }
@@ -38,6 +41,8 @@ async function main(argv: string[]) {
   };
   const opts: VerifyOptions = {};
   if (keyFile) { const k = readFileSync(keyFile, "utf8"); opts.issuerPublicKeyPem = k.trim().startsWith("{") ? JSON.parse(k).public_key_pem : k; }
+  if (keysFile) opts.issuerKeys = JSON.parse(readFileSync(keysFile, "utf8"));
+  if (allowAdmin) opts.allowAdminApproval = true;
   if (origins.length) opts.expectedOrigins = origins;
   if (payees.length) opts.expectedPayee = payees;
   if (live || submit) opts.paypal = creds();

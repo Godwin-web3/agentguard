@@ -6,11 +6,17 @@ import { verifyAp2 } from "./ap2.ts";
 
 export const SUPPORTED_SCHEMAS = ["agentguard.proof-of-intent/v1"];
 
-export interface Envelope { receipt: any; signature: { alg: string; key_id?: string; public_key_pem?: string; value: string } }
+export interface Envelope { receipt: any; signature: { alg: string; key_id?: string; kid?: string; public_key_pem?: string; value: string } }
+/** One entry of the issuer key set at /.well-known/agentguard-keys. */
+export interface IssuerKey { kid: string; kty?: string; crv?: string; x?: string; public_key_pem?: string; created?: string; retired?: string | null; status?: string }
 export interface Check { check: string; pass: boolean; detail: string }
 export interface VerifyOptions {
   /** PEM of the AgentGuard issuer key you trust (from its /.well-known/agentguard-key). Without it, the embedded key is used and the result is not "trusted". */
   issuerPublicKeyPem?: string;
+  /** The issuer key set (/.well-known/agentguard-keys). Keys are pinned by kid: unknown kids and keys used outside their lifetime are rejected. */
+  issuerKeys?: { keys: IssuerKey[] };
+  /** Accept a human approval authenticated only by the operator's admin token (receipts issued before passkey approvals). Default: reject. */
+  allowAdminApproval?: boolean;
   /** WebAuthn origins you accept for the user's passkey assertion. Defaults to the origins the receipt declares. */
   expectedOrigins?: string[];
   /** Your PayPal merchant ids/emails: the order's payee must be one of them. */
@@ -32,8 +38,9 @@ const keyIdOf = (pem: string) => createHash("sha256").update(createPublicKey(pem
 const fmt = (m: number) => `${Math.floor(m / 100)}.${String(m % 100).padStart(2, "0")}`;
 
 /** Verify a WebAuthn assertion whose challenge must be exactly base64url(bytes of hexDigest). */
-export function verifyPasskeyAssertion(a: { sig: any; cosePublicKey: string; hexDigest: string; rpId: string; origins: string[] }): Check[] {
-  const out: Check[] = []; const add = (check: string, pass: boolean, detail: string) => out.push({ check, pass, detail });
+export function verifyPasskeyAssertion(a: { sig: any; cosePublicKey: string; hexDigest: string; rpId: string; origins: string[]; prefix?: string; what?: string }): Check[] {
+  const out: Check[] = []; const pre = a.prefix ?? "passkey", what = a.what ?? "the mandate hash";
+  const add = (check: string, pass: boolean, detail: string) => out.push({ check: check.replace(/^passkey/, pre), pass, detail: detail.replace("the mandate hash", what) });
   try {
     const cdj = b64uBytes(a.sig.client_data_json); const cd = JSON.parse(cdj.toString("utf8"));
     const want = Buffer.from(a.hexDigest, "hex").toString("base64url");
@@ -117,13 +124,28 @@ export async function verifyReceipt(env: Envelope, opts: VerifyOptions = {}): Pr
 
   // 1. Issuer attestation (Ed25519 over canonical(receipt)).
   let trusted = false;
-  const pem = opts.issuerPublicKeyPem ?? env.signature.public_key_pem;
-  if (!opts.issuerPublicKeyPem) warnings.push("issuer key not pinned: verified with the key embedded in the receipt. Pin the issuer's /.well-known/agentguard-key key to trust the attestation.");
+  let pem = opts.issuerPublicKeyPem ?? env.signature.public_key_pem;
+  let pinned = !!opts.issuerPublicKeyPem;
+  if (opts.issuerKeys) {
+    const kid = env.signature.kid ?? env.signature.key_id ?? r.issuer?.key_id;
+    const k = (opts.issuerKeys.keys ?? []).find(k => k.kid === kid);
+    let kpem: string | undefined;
+    try { kpem = k?.public_key_pem ?? (k?.x ? createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: k.x }, format: "jwk" }).export({ type: "spki", format: "pem" }).toString() : undefined); } catch { kpem = undefined; }
+    const kidOk = !!k && !!kpem && keyIdOf(kpem) === kid;
+    add("issuer.kid", kidOk, !k ? `unknown kid ${kid}: not in the pinned issuer key set` : kidOk ? `kid ${kid} pinned (${k.retired ? `retired ${k.retired}` : "active"})` : `key set entry for ${kid} does not hash to its kid`);
+    if (k) {
+      const at = new Date(r.issued_at).getTime();
+      const live = !Number.isNaN(at) && (!k.created || at >= new Date(k.created).getTime()) && (!k.retired || at < new Date(k.retired).getTime());
+      add("issuer.key_lifecycle", live, live ? `issued ${r.issued_at} while key was active` : `issued ${r.issued_at} outside key lifetime (created ${k.created ?? "?"}, retired ${k.retired ?? "never"})`);
+    }
+    pem = kidOk ? kpem : undefined; pinned = kidOk;
+  }
+  if (!pinned && !opts.issuerKeys) warnings.push("issuer key not pinned: verified with the key embedded in the receipt. Pin the issuer's /.well-known/agentguard-key key to trust the attestation.");
   try {
     const ok = env.signature.alg === "Ed25519" && !!pem && edVerify(null, Buffer.from(canonical(r)), createPublicKey(pem!), Buffer.from(env.signature.value, "base64"));
     add("issuer.signature", ok, ok ? `Ed25519 signature valid (key ${keyIdOf(pem!)})` : "issuer signature invalid: receipt altered or signed by another key");
-    if (ok && r.issuer?.key_id) add("issuer.key_id", r.issuer.key_id === keyIdOf(pem!), `receipt names key ${r.issuer.key_id}`);
-    trusted = ok && !!opts.issuerPublicKeyPem;
+    if (ok && r.issuer?.key_id) add("issuer.key_id", r.issuer.key_id === keyIdOf(pem!) && (!env.signature.kid || env.signature.kid === r.issuer.key_id), `receipt names key ${r.issuer.key_id}`);
+    trusted = ok && pinned;
   } catch (e) { add("issuer.signature", false, `bad issuer key or signature: ${(e as Error).message}`); }
 
   // 2. The user's mandate and passkey signature over it.
@@ -158,7 +180,26 @@ export async function verifyReceipt(env: Envelope, opts: VerifyOptions = {}): Pr
   const approval = r.approval;
   const approved = d.decision === "approve" || (d.decision === "needs_human" && approval?.resolution === "approved" && approval?.proposal_hash === d.proposal_hash);
   add("decision.outcome", approved && failed.length === 0, `decision=${d.decision}${approval ? `, human approval ${approval.resolution} by ${approval.approver ?? "?"}` : ""}${failed.length ? `; failed checks: ${failed.join(", ")}` : ""}`);
-  if (approval && approval.method !== "passkey") warnings.push(`human approval was authenticated by ${approval.method}, not by the user's passkey; it is attested by the issuer only.`);
+  if (approval) {
+    if (approval.method === "passkey") {
+      const st = approval.statement ?? {}; const as = approval.assertion;
+      const sd = sha256("agentguard:approval:v1:" + canonical(st));
+      add("approval.credential", !!as && !!pk && as.credential_id === pk.credential_id, `approval signed by credential ${as?.credential_id ?? "?"}`);
+      if (as && pk) checks.push(...verifyPasskeyAssertion({ sig: as, cosePublicKey: pk.public_key_cose, hexDigest: sd, rpId: r.issuer?.webauthn_rp_id ?? "",
+        origins: opts.expectedOrigins ?? r.issuer?.webauthn_origins ?? [], prefix: "approval.passkey", what: "the approval statement" }));
+      const bound = st.kind === "agentguard.payment-approval" && st.decision === "approve" && st.approval_id === approval.approval_id
+        && st.payment_id === r.payment?.payment_id && st.proposal_hash === d.proposal_hash && st.paypal_order_id === r.order?.paypal_order_id
+        && st.order_digest === r.order?.digest && st.amount_minor === r.payment?.amount_minor && st.currency === r.payment?.currency
+        && (!m || (st.mandate_id === m.mandate_id && st.user_id === m.user_id));
+      add("approval.statement", bound, bound ? `user approved ${fmt(st.amount_minor)} ${st.currency} on order ${st.paypal_order_id} (nonce ${String(st.nonce).slice(0, 8)}…)` : "approval statement is not bound to this payment, order, amount and decision");
+      const inTime = !!st.expires_at && new Date(approval.resolved_at).getTime() <= new Date(st.expires_at).getTime();
+      add("approval.time", inTime, `resolved ${approval.resolved_at}; request expired ${st.expires_at}`);
+    } else if (opts.allowAdminApproval) warnings.push(`human approval was authenticated by ${approval.method}, not by the user's passkey; it is attested by the issuer only.`);
+    else add("approval.method", false, `human approval was authenticated by ${approval.method}, not by the user's passkey (pass allowAdminApproval to accept legacy receipts)`);
+  }
+  const enr = pk?.enrollment;
+  if (pk && !enr) warnings.push("passkey enrollment provenance not recorded (registered before enrollment tokens).");
+  if (enr?.replaces) warnings.push(`this passkey replaced ${enr.replaces} via ${enr.via} (issued by ${enr.issued_by} at ${enr.issued_at}).`);
   if (m) {
     const t = (s: string) => new Date(s).getTime();
     const inWin = t(m.created_at) <= t(d.evaluated_at) && t(d.evaluated_at) < t(m.expires_at) && t(r.payment?.captured_at) >= t(d.evaluated_at);

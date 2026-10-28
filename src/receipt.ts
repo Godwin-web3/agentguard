@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { canonical, sha256 } from "./canonical.ts";
-import type { Signer } from "./keys.ts";
+import type { IssuerSigner } from "./keys.ts";
 import type { PasskeyService } from "./passkeys.ts";
 import type { Store } from "./store.ts";
 import { buildAp2 } from "../packages/intent-verifier/src/ap2.ts";
@@ -14,13 +14,13 @@ import { buildAp2 } from "../packages/intent-verifier/src/ap2.ts";
  * Wire format (schema agentguard.proof-of-intent/v1):
  *   { "receipt": {...}, "signature": { "alg": "Ed25519", "key_id", "public_key_pem", "value" } }
  * `value` is a detached Ed25519 signature over the UTF-8 bytes of canonical(receipt) (sorted keys, no whitespace).
- * The embedded public key is a convenience; verifiers should pin the key from /.well-known/agentguard-key.
+ * The embedded public key is a convenience; verifiers should pin keys by kid from /.well-known/agentguard-keys.
  */
 export const RECEIPT_SCHEMA = "agentguard.proof-of-intent/v1";
 
 export interface ReceiptEnvelope {
   receipt: Record<string, any> & { schema: string; receipt_id: string };
-  signature: { alg: "Ed25519"; key_id: string; public_key_pem: string; value: string };
+  signature: { alg: "Ed25519"; key_id: string; kid?: string; public_key_pem: string; value: string };
 }
 
 /** Short, stable id for a public key: first 16 bytes of sha256(SPKI DER), hex. */
@@ -40,8 +40,8 @@ export interface IssueInput {
 }
 
 export class ReceiptService {
-  private store: Store; private signer: Signer; private passkeys: PasskeyService; readonly issuer: string;
-  constructor(deps: { store: Store; signer: Signer; passkeys: PasskeyService; issuer?: string }) {
+  private store: Store; private signer: IssuerSigner; private passkeys: PasskeyService; readonly issuer: string;
+  constructor(deps: { store: Store; signer: IssuerSigner; passkeys: PasskeyService; issuer?: string }) {
     this.store = deps.store; this.signer = deps.signer; this.passkeys = deps.passkeys; this.issuer = deps.issuer ?? "agentguard";
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS receipts (receipt_id TEXT PRIMARY KEY, payment_id TEXT NOT NULL UNIQUE,
       capture_id TEXT NOT NULL, receipt_hash TEXT NOT NULL, envelope TEXT NOT NULL, issued_at TEXT NOT NULL)`);
@@ -74,7 +74,7 @@ export class ReceiptService {
         hash: sm.mandate_hash,
         // The user's passkey assertion whose WebAuthn challenge is base64url(bytes(hash)).
         user_signature: sm.user_signature,
-        passkey: { credential_id: cred.credential_id, public_key_cose: cred.public_key },
+        passkey: { credential_id: cred.credential_id, public_key_cose: cred.public_key, enrollment: this.passkeys.enrollmentFor(sm.mandate.user_id) },
       },
       order: {
         paypal_order_id: proposal.paypal_order_id,
@@ -92,8 +92,10 @@ export class ReceiptService {
         approval_id: approvalRow.approval_id, resolution: approvalRow.resolution, resolved_at: approvalRow.resolved_at,
         proposal_hash: approvalRow.proposal_hash, approver: granted ? JSON.parse(granted.payload).approver ?? null : null,
         audit_hash: granted?.hash ?? null,
-        // Human approvals are authenticated by the operator's admin token, not by a user passkey. Stated, not hidden.
-        assertion: null, method: "admin_token",
+        // The user's passkey signed approvalChallenge(canonical(statement)); verifiable offline with mandate.passkey.
+        ...(() => { const g = granted ? JSON.parse(granted.payload) : {}; return g.method === "passkey"
+          ? { method: "passkey", statement: g.statement, assertion: g.user_signature }
+          : { method: "admin_token", statement: null, assertion: null }; })(),
       } : null,
       payment: {
         payment_id: pay.payment_id, currency: pay.currency, amount_minor: pay.amount_minor,
@@ -105,7 +107,7 @@ export class ReceiptService {
     // AP2-compatible views (Intent/Cart/Payment Mandates + receipts), derived deterministically and covered by the signature.
     (receipt as any).ap2 = buildAp2(receipt);
     const body = canonical(receipt);
-    const env: ReceiptEnvelope = { receipt, signature: { alg: "Ed25519", key_id: receipt.issuer.key_id, public_key_pem: this.signer.publicKeyPem(), value: this.signer.sign(body) } };
+    const env: ReceiptEnvelope = { receipt, signature: { alg: "Ed25519", key_id: receipt.issuer.key_id, kid: receipt.issuer.key_id, public_key_pem: this.signer.publicKeyPem(), value: this.signer.sign(body) } };
     const receipt_hash = sha256(body);
     this.store.tx(() => {
       this.store.db.prepare("INSERT INTO receipts VALUES (?,?,?,?,?,?)").run(receipt_id, pay.payment_id, i.capture.capture_id, receipt_hash, JSON.stringify(env), receipt.issued_at);

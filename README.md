@@ -17,10 +17,11 @@ Every payment captured against a merchant's PayPal order gets a receipt (`agentg
 | `payment` | Authorization ID, capture ID, capture status, amount, timestamps, and the `AGPOI-<receipt_id>` reference written on the PayPal capture as `invoice_id`. |
 | `audit` | Sequence number and hash of the capture entry in the hash-chained audit log. |
 
-Get it via `GET /v1/agent/payments/:id/receipt` (agent), `GET /v1/payments/:id/receipt` / `GET /v1/receipts/:id` (admin), the MCP tool `get_payment_receipt`, or, if `AGENTGUARD_PUBLIC_RECEIPTS=1`, `GET /v1/public/receipts/:id`. The issuer key is published at `/.well-known/agentguard-key`.
+Get it via `GET /v1/agent/payments/:id/receipt` (agent), `GET /v1/payments/:id/receipt` / `GET /v1/receipts/:id` (admin), the MCP tool `get_payment_receipt`, or, if `AGENTGUARD_PUBLIC_RECEIPTS=1`, `GET /v1/public/receipts/:id`. Issuer keys are published as a key set at `/.well-known/agentguard-keys` (each key's `kid`, `created_at`, `retired_at`); receipts carry `signature.kid`. The legacy `/.well-known/agentguard-key` still returns the active key.
 
 ```sh
-intent-verify receipt.json --issuer-key issuer-key.json --payee you@shop.example   # offline
+intent-verify receipt.json --issuer-keys agentguard-keys.json --payee you@shop.example   # offline, pinned key set
+intent-verify receipt.json --issuer-key issuer-key.json                               # single pinned key
 PAYPAL_CLIENT_ID=… PAYPAL_CLIENT_SECRET=… intent-verify receipt.json --issuer-key issuer-key.json --paypal  # + live re-check with your own keys
 intent-verify evidence receipt.json --out evidence/ [--submit PP-D-…]                # PayPal provide-evidence package (PDF + input JSON)
 ```
@@ -28,9 +29,10 @@ intent-verify evidence receipt.json --out evidence/ [--submit PP-D-…]         
 Tampered receipts, swapped orders, forged mandates and wrong issuer keys all fail (`test/receipts.test.ts`). Live sandbox run: `scripts/sandbox-receipt.sh`.
 
 **What a receipt is not.** It is *evidence*, not a guaranteed dispute or chargeback win: PayPal and card networks decide disputes on their own rules, and "item not received" or "not as described" claims are about fulfilment, which no payment receipt proves. Be precise about what is attested by whom:
-- The passkey signature over the mandate, and the order/mandate match, are checked independently by the verifier. Everything else (decision, approvals, cumulative spend across payments, audit position) is **attested by the issuer key**, so **pin that key** (`--issuer-key`) rather than trusting the one embedded in the receipt.
-- Human approvals today are authenticated with the operator's admin token, not a passkey (`approval.method: "admin_token"`).
-- The passkey proves the *holder of that credential* signed the mandate; binding the credential to a real person is the enrollment step's job.
+- Checked independently by the verifier: the passkey signature over the mandate, the order/mandate match, and, for held payments, the passkey signature over the approval statement (payment, order, amount, decision, nonce, expiry). Everything else (decision, cumulative spend, audit position, enrollment provenance) is **attested by the issuer key**, so **pin the key set** (`--issuer-keys`) rather than trusting the key embedded in the receipt. The verifier rejects unknown kids and receipts signed by a key after its `retired_at`.
+- Approvals are passkey-signed (`approval.method: "passkey"`). Receipts from before this change show `admin_token` and fail `approval.method` unless you pass `--allow-admin-approval`.
+- The passkey proves the *holder of that credential* signed. Binding it to a real person happens at enrollment: whoever holds a valid enrollment link (issued with the admin token) enrolls the passkey. `mandate.passkey.enrollment` on the receipt records who issued it and whether it replaced an earlier passkey, and the verifier warns on replacements.
+- Rotation does not protect against a key that leaked *before* it was retired: anything signed while it was active stays valid. Retire promptly and rotate the admin token too.
 
 ## AP2 compatibility: AP2-style verifiable intent, enforced and dispute-ready on PayPal, today
 Every receipt also carries an `ap2` block: the same purchase expressed as [Agent Payments Protocol (AP2)](https://github.com/google-agentic-commerce/AP2) mandates, using the JSON shapes in AP2's `code/sdk/schemas/ap2` (pinned to commit `e1ea56d`, Apr 2026). AP2 v0.1 called these the Intent / Cart / Payment Mandates; the current spec splits intent into Open Checkout + Open Payment Mandates and calls the cart a Checkout Mandate. AgentGuard emits the current shapes under the v0.1 role names:
@@ -71,7 +73,7 @@ Agentic commerce gives agents a live payment capability. Detection of prompt inj
 | Spending escalation | Deterministic per-tx and total limits, atomic reservations (`BEGIN IMMEDIATE`) |
 | Concurrent double-spend of budget | Serialized reservation under a write lock |
 | Duplicate execution / replay | Idempotency keys bound to a proposal hash; PayPal-Request-Id on every money call |
-| Approval reuse or swap | Single-use approvals bound to the exact proposal hash, 15-min TTL |
+| Approval reuse or swap | Single-use approvals bound to the exact proposal hash, 15-min TTL; decision signed by the user's passkey over payment, order, amount, decision and a single-use 5-min nonce |
 | Mandate tampering or forged consent | User's passkey signs the canonical mandate hash (it is the WebAuthn challenge); the server re-verifies that signature against the stored public key on every proposal, approval and capture. An admin token alone cannot activate or revoke a mandate |
 | Agent impersonation | Per-agent API keys; proposals must match the authenticated agent |
 | Merchant substitution | Payee allowlist + verification of the payee PayPal reports on the order |
@@ -95,16 +97,28 @@ npm test       # threat-model test suite
 2. `POST /v1/wallets/setup` → PayPal consent URL (vault the buyer's wallet once)
 3. `POST /v1/mandates/draft-from-text {user_id, agent_id, text}` (or structured `POST /v1/mandates`) → draft + plain-English summary; user reviews the exact mandate JSON and signs it with their passkey (`POST /v1/mandates/:id/sign-request` → `navigator.credentials.get` with the mandate hash as challenge → `POST /v1/mandates/:id/confirm {mandate_hash, assertion}`) → active
 4. Agent: `POST /v1/agent/payments` or MCP `propose_payment`
-5. Escalations: `GET /v1/approvals`, `POST /v1/approvals/:id {approve}`
+5. Escalations: `GET /v1/approvals`, `POST /v1/approvals/:id/request {approve}` → statement + WebAuthn options (challenge = base64url sha256(`"agentguard:approval:v1:"` + canonical(statement)), 5-min nonce) → `POST /v1/approvals/:id {approve, assertion}`. The admin token alone cannot approve or deny.
 6. `GET /v1/audit`, `GET /v1/audit/verify`
 
 ### User passkeys (what is and isn't enforced)
-- One passkey per user, created in the console (`POST /v1/users/:id/passkey/options`, then `POST /v1/users/:id/passkey`). User verification (PIN/biometric) is required.
+- One passkey per user. User verification (PIN/biometric) is required.
+- **Enrollment tokens, not trust-on-first-use.** The admin issues a single-use link bound to one user (`POST /v1/users/:id/enrollments` → `{token, link: /console#enroll=…, expires_at}`, 15-min default). Only its sha256 is stored. The user redeems it (`POST /v1/enroll/options {token}`, `POST /v1/enroll {token, response}`). Reused, expired, or other-user tokens are refused.
+- **Replacing a passkey** works only with the current passkey (`POST /v1/users/:id/reenroll-request` → assert → `POST /v1/users/:id/reenroll` mints a token) or a fresh admin link that names the credential it replaces. Both are written to the audit log (`passkey.replaced`) and to receipts (`mandate.passkey.enrollment`). Mandates signed by the old passkey stop working until they are re-signed.
 - Confirming a mandate needs a WebAuthn assertion whose challenge is the base64url SHA-256 of the canonical mandate. The assertion is stored and **re-verified on every proposal** (statelessly: origin, RP ID, UP+UV flags, signature over the stored public key), so editing the mandate row, its hash, the signature, or swapping the stored public key all stop spending.
 - Revocation needs a separate assertion over `sha256("agentguard:revoke:v1:" + mandate_hash)`, so a signing assertion can't be replayed as a revocation. Unsigned drafts can be discarded without one.
 - Mandates created before this change are migrated to `unsigned` and are not usable until the user re-signs them.
-- Honest limits: whoever controls the admin token can still register the first passkey for a user who has none (enrolment is trust-on-first-use; bind it to your own login in production). There is no operator kill-switch that bypasses the user's passkey. `scripts/dev-passkey.ts` is a software passkey for scripts and CI only.
-- `GET /v1/audit/attestation` returns the audit chain head signed with the server key; `/.well-known/agentguard-key` publishes that key.
+- Honest limits: the admin token can still issue an enrollment link, and so can replace a user's passkey. That replacement is logged and shown on every later receipt, but it is not prevented. In production, deliver links over your own authenticated channel (email/SSO). There is no operator kill-switch that bypasses the user's passkey; an operator can still let held payments expire unapproved. `scripts/dev-passkey.ts` is a software passkey for scripts and CI only.
+- `GET /v1/audit/attestation` returns the audit chain head signed with the active issuer key (with `kid`).
+
+### Issuer key rotation
+Keys live in `data/issuer-keys.json` (0600; override with `AGENTGUARD_KEYRING_FILE`). On first start it is seeded from the legacy `data/signing-key.pem`. `kid` = the first 32 hex characters of sha256(SPKI DER).
+```bash
+node --experimental-strip-types scripts/rotate-key.ts          # retire the active key, create a new one (restart the server)
+node --experimental-strip-types scripts/rotate-key.ts --list
+curl -X POST -H "Authorization: Bearer $AGENTGUARD_ADMIN_TOKEN" http://localhost:8787/v1/keys/rotate   # live, audited
+curl http://localhost:8787/.well-known/agentguard-keys > agentguard-keys.json                          # pin this
+```
+Retired keys stay published, so old receipts keep verifying. A receipt that claims a retired key but was issued after its `retired_at` is rejected.
 
 ### Recovery
 The process is safe to restart. On startup and every 5 minutes (override with `AGENTGUARD_RECOVER_INTERVAL_MS`) AgentGuard scans for payments still in `reserved` or `authorized` older than 60 seconds and converges them with PayPal:
@@ -125,8 +139,8 @@ curl -X POST -H "Authorization: Bearer $AGENTGUARD_ADMIN_TOKEN" -H "content-type
 ```
 
 ### Owner console
-`/console` (admin token required): create the user's passkey, describe a mandate in plain English, review the code-rendered summary and exact JSON, sign it with the passkey (the console recomputes the hash locally and refuses if the challenge isn't that hash); revoke with the passkey;
-approve or deny escalated payments from the inbox; browse mandates, payments and the hash-chained audit ledger in AG Grid;
+`/console` (admin token required): enroll the user's passkey or hand them a single-use enrollment link (`#enroll=`), describe a mandate in plain English, review the code-rendered summary and exact JSON, sign it with the passkey (the console recomputes the hash locally and refuses if the challenge isn't that hash); revoke with the passkey;
+approve or deny escalated payments with the passkey (the console recomputes the approval challenge from the statement and refuses on mismatch); browse mandates, payments and the hash-chained audit ledger in AG Grid;
 one-click chain verification.
 
 ### Plain-English mandates, without trusting the model

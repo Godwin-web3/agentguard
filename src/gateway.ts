@@ -2,7 +2,7 @@ import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { canonical, sha256, toMinor } from "./canonical.ts";
 import { evaluatePolicy, proposalHash } from "./policy.ts";
 import { orderFacts, OrderError } from "./order.ts";
-import { mandateChallenge, revokeChallenge, type PasskeyService } from "./passkeys.ts";
+import { mandateChallenge, revokeChallenge, approvalChallenge, type PasskeyService } from "./passkeys.ts";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import type { RiskAnalyzer } from "./risk.ts";
 import { receiptIdFor, receiptReference, type ReceiptService } from "./receipt.ts";
@@ -18,6 +18,10 @@ export interface ProposeResult {
 export class GatewayError extends Error { code: number; constructor(code: number, msg: string) { super(msg); this.code = code; } }
 
 const APPROVAL_TTL_MS = 15 * 60 * 1000;
+const APPROVAL_SIGN_TTL_MS = 5 * 60 * 1000;
+export interface ApprovalStatement { v: 1; kind: "agentguard.payment-approval"; approval_id: string; payment_id: string; mandate_id: string; user_id: string;
+  proposal_hash: string; paypal_order_id: string | null; order_digest: string | null; amount_minor: number; currency: string;
+  decision: "approve" | "deny"; nonce: string; expires_at: string }
 
 export class Gateway {
   private store: Store; private passkeys: PasskeyService; private risk: RiskAnalyzer; private rail: PaymentRail; private receipts?: ReceiptService;
@@ -233,9 +237,14 @@ export class Gateway {
     return this.view(row.payment_id);
   }
 
-  /** Human decision on an escalated payment. Single-use, bound to the exact proposal hash, re-checks revocation. */
-  async resolveApproval(approvalId: string, approve: boolean, approver: string): Promise<ProposeResult> {
-    if (approve) this.assertNotPaused();
+  /** The exact statement a human signs to approve or deny a held payment. Binds payment, order, amount, decision and a one-time nonce. */
+  approvalStatement(a: any, pay: PaymentRow, decision: "approve" | "deny", nonce: string, expiresAt: string): ApprovalStatement {
+    const p = JSON.parse(pay.proposal); const sm = this.store.getMandate(pay.mandate_id)!;
+    return { v: 1, kind: "agentguard.payment-approval", approval_id: a.approval_id, payment_id: pay.payment_id, mandate_id: pay.mandate_id,
+      user_id: sm.mandate.user_id, proposal_hash: a.proposal_hash, paypal_order_id: p.paypal_order_id ?? null, order_digest: p.order_digest ?? null,
+      amount_minor: pay.amount_minor, currency: pay.currency, decision, nonce, expires_at: expiresAt };
+  }
+  private pendingApproval(approvalId: string) {
     const a = this.store.getApproval(approvalId);
     if (!a) throw new GatewayError(404, "approval not found");
     if (a.resolved_at) throw new GatewayError(409, `approval already resolved (${a.resolution})`);
@@ -245,10 +254,41 @@ export class Gateway {
       if (this.store.resolveApproval(approvalId, "expired")) this.store.transition(pay.payment_id, ["needs_human"], "denied", { error: "approval expired" });
       throw new GatewayError(410, "approval expired");
     }
+    return { a, pay };
+  }
+  /** Step 1 of a human decision: a fresh nonce and the WebAuthn options whose challenge commits to the statement. */
+  async approvalRequest(approvalId: string, approve: boolean) {
+    const { a, pay } = this.pendingApproval(approvalId);
+    const nonce = randomUUID();
+    const exp = new Date(Math.min(Date.now() + APPROVAL_SIGN_TTL_MS, new Date(a.expires_at).getTime())).toISOString();
+    const statement = this.approvalStatement(a, pay, approve ? "approve" : "deny", nonce, exp);
+    const options = await this.pk(() => this.passkeys.signingOptions(statement.user_id, approvalChallenge(canonical(statement))));
+    this.store.db.prepare("UPDATE approvals SET nonce=?, nonce_expires_at=?, decision_request=? WHERE approval_id=? AND resolved_at IS NULL")
+      .run(nonce, exp, statement.decision, approvalId);
+    return { approval_id: approvalId, statement, statement_hash: sha256(canonical(statement)), options };
+  }
+
+  /**
+   * Human decision on an escalated payment. Requires the user's passkey assertion over the approval statement
+   * (the admin token alone cannot approve or deny). Single-use nonce, bound to the exact proposal hash, re-checks revocation.
+   */
+  async resolveApproval(approvalId: string, approve: boolean, assertion: AuthenticationResponseJSON | undefined, approver = "user"): Promise<ProposeResult> {
+    if (approve) this.assertNotPaused();
+    const { a, pay } = this.pendingApproval(approvalId);
+    if (!assertion) throw new GatewayError(400, "a passkey assertion over the approval statement is required; the admin token alone cannot approve or deny");
+    const decision = approve ? "approve" : "deny";
+    if (!a.nonce || a.decision_request !== decision) throw new GatewayError(409, `no pending ${decision} request for this approval; call the request endpoint first`);
+    if (new Date() > new Date(a.nonce_expires_at)) throw new GatewayError(410, "approval request expired; request a new one");
+    const statement = this.approvalStatement(a, pay, decision, a.nonce, a.nonce_expires_at);
+    const sig = await this.pk(() => this.passkeys.verifyAssertion(statement.user_id, assertion, approvalChallenge(canonical(statement))));
+    // Consume the nonce: the same assertion can never be presented twice.
+    const used = this.store.db.prepare("UPDATE approvals SET nonce=NULL WHERE approval_id=? AND nonce=?").run(approvalId, a.nonce);
+    if (Number(used.changes) !== 1) throw new GatewayError(409, "approval request already used");
+    const approvalEvidence = { statement, user_signature: sig };
     if (!approve) {
       if (!this.store.resolveApproval(approvalId, "denied")) throw new GatewayError(409, "approval already resolved");
-      this.store.transition(pay.payment_id, ["needs_human"], "denied", { error: `denied by ${approver}` });
-      this.store.audit("approval.denied", pay.payment_id, { approval_id: approvalId, approver });
+      this.store.transition(pay.payment_id, ["needs_human"], "denied", { error: `denied by ${approver} (passkey)` });
+      this.store.audit("approval.denied", pay.payment_id, { approval_id: approvalId, approver, method: "passkey", ...approvalEvidence });
       return this.view(pay.payment_id);
     }
     const before = this.store.getMandate(pay.mandate_id)!;
@@ -261,7 +301,7 @@ export class Gateway {
     });
     if (!ok) { this.store.resolveApproval(approvalId, "denied"); this.store.transition(pay.payment_id, ["needs_human"], "denied", { error: "mandate no longer active" });
       throw new GatewayError(409, "mandate no longer active"); }
-    this.store.audit("approval.granted", pay.payment_id, { approval_id: approvalId, approver, proposal_hash: pay.proposal_hash });
+    this.store.audit("approval.granted", pay.payment_id, { approval_id: approvalId, approver, proposal_hash: pay.proposal_hash, method: "passkey", ...approvalEvidence });
     await this.execute(pay.payment_id);
     return this.view(pay.payment_id);
   }

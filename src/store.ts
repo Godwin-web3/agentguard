@@ -49,6 +49,11 @@ export class Store {
     const cols = (this.db.prepare("PRAGMA table_info(mandates)").all() as any[]).map(c => c.name);
     if (!cols.includes("user_signature")) this.db.exec("ALTER TABLE mandates ADD COLUMN user_signature TEXT");
     if (!cols.includes("revocation_signature")) this.db.exec("ALTER TABLE mandates ADD COLUMN revocation_signature TEXT");
+    // v3: human approvals are passkey-signed over a per-request nonce.
+    const acols = (this.db.prepare("PRAGMA table_info(approvals)").all() as any[]).map(c => c.name);
+    if (!acols.includes("nonce")) this.db.exec("ALTER TABLE approvals ADD COLUMN nonce TEXT");
+    if (!acols.includes("nonce_expires_at")) this.db.exec("ALTER TABLE approvals ADD COLUMN nonce_expires_at TEXT");
+    if (!acols.includes("decision_request")) this.db.exec("ALTER TABLE approvals ADD COLUMN decision_request TEXT");
     const legacy = this.db.prepare("SELECT mandate_id, status FROM mandates WHERE user_signature IS NULL AND status='active'").all() as any[];
     for (const r of legacy) {
       this.db.prepare("UPDATE mandates SET status='unsigned', updated_at=? WHERE mandate_id=?").run(new Date().toISOString(), r.mandate_id);
