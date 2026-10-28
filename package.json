@@ -4,9 +4,17 @@
   "description": "Financial authorization gateway for AI agents that pay through PayPal: scoped, signed spending mandates enforced deterministically before any money moves.",
   "type": "module",
   "license": "Apache-2.0",
-  "engines": { "node": ">=22.6" },
+  "engines": {
+    "node": ">=22.6"
+  },
   "scripts": {
     "start": "node --experimental-strip-types --no-warnings src/server.ts",
     "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "^14.0.3"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
   }
 }

@@ -44,7 +44,8 @@
         <input id="user" placeholder="user_id" value="demo-user" style="flex:1">
         <input id="agent" placeholder="agent_id" value="shopper" style="flex:1">
       </div>
-      <p class="mute">Say what the agent may buy. AI drafts it; you sign the exact limits.</p>
+      <div class="row2" style="margin-top:8px"><span id="pkState" class="pill">passkey: —</span><button class="ghost" id="pkCreate">Create passkey</button></div>
+      <p class="mute">Say what the agent may buy. AI drafts it; you sign the exact mandate with your passkey. The server cannot sign for you.</p>
       <textarea id="text" placeholder="Buy one laptop under $900 this week, only from store@bestlaptops.example. Ask me over $600."></textarea>
       <div class="row2"><button id="draft">Draft mandate</button></div>
       <div id="draftOut"></div>
@@ -72,7 +73,7 @@ async function api(path, opts = {}) {
   return j;
 }
 const pill = (v, map) => `<span class="pill ${map[v] || ""}">${esc(v)}</span>`;
-const statusMap = { active:"ok", captured:"ok", approve:"ok", draft:"warn", needs_human:"warn", pending_approval:"warn", authorized:"warn",
+const statusMap = { active:"ok", captured:"ok", approve:"ok", draft:"warn", unsigned:"warn", needs_human:"warn", pending_approval:"warn", authorized:"warn",
   revoked:"bad", rejected:"bad", reject:"bad", voided:"bad", failed:"bad", expired:"bad", exhausted:"" };
 const cellPill = p => p.value == null ? "" : pill(p.value, statusMap);
 const when = p => p.value ? new Date(p.value).toLocaleString() : "";
@@ -89,12 +90,14 @@ grid("gMandates", [
   { headerName: "Payments", valueGetter: p => `${p.data.spend?.tx_count ?? 0} / ${p.data.mandate.constraints.max_transactions}`, maxWidth: 110 },
   { field: "mandate.agent_id", headerName: "Agent", maxWidth: 120 },
   { field: "mandate.expires_at", headerName: "Expires", valueFormatter: when },
-  { headerName: "", maxWidth: 100, sortable: false, filter: false, cellRenderer: p => {
-      if (p.data.status !== "active" && p.data.status !== "draft") return "";
-      const b = document.createElement("button"); b.className = "bad"; b.textContent = "Revoke"; b.style.padding = "2px 10px";
-      b.onclick = async () => { if (!confirm("Revoke this mandate? Pending authorizations are voided.")) return;
-        await api(`/v1/mandates/${p.data.mandate.mandate_id}/revoke`, { method: "POST", body: JSON.stringify({ reason: "revoked in console" }) }); refresh(); };
-      return b; } },
+  { headerName: "", minWidth: 170, sortable: false, filter: false, cellRenderer: p => {
+      const st = p.data.status, id = p.data.mandate.mandate_id, wrap = document.createElement("span");
+      const btn = (cls, label, fn) => { const b = document.createElement("button"); b.className = cls; b.textContent = label; b.style.cssText = "padding:2px 10px;margin-right:6px";
+        b.onclick = async () => { try { await fn(); } catch (e) { alert(e.message); } refresh(); }; wrap.appendChild(b); };
+      if (st === "draft" || st === "unsigned") btn("ok", "Review & sign", () => reviewAndSign(id));
+      if (st === "active") btn("bad", "Revoke", async () => { if (!confirm("Revoke this mandate with your passkey? Pending authorizations are voided.")) return; await signedRevoke(id); });
+      if (st === "draft" || st === "unsigned") btn("ghost", "Discard", () => api(`/v1/mandates/${id}/revoke`, { method: "POST", body: JSON.stringify({ reason: "discarded" }) }));
+      return wrap; } },
 ]);
 grid("gPayments", [
   { field: "created_at", headerName: "Time", valueFormatter: when, sort: "desc" },
@@ -148,13 +151,60 @@ $("#draft").onclick = async () => {
     const d = await api("/v1/mandates/draft-from-text", { method: "POST", body: JSON.stringify({ user_id: $("#user").value, agent_id: $("#agent").value, text: $("#text").value }) });
     out.innerHTML = `<div class="card"><b>You're about to authorize</b><ul class="sum">${d.summary.map(s => `<li>${esc(s)}</li>`).join("")}</ul>
       ${d.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}
-      <div class="mute">Drafted by ${esc(d.source)} · mandate hash</div><code>${esc(d.mandate_hash)}</code>
-      <div class="row2"><button class="ok" id="sign">Confirm &amp; sign</button><button class="ghost" id="discard">Discard</button></div></div>`;
-    $("#sign").onclick = async () => { await api(`/v1/mandates/${d.mandate.mandate_id}/confirm`, { method: "POST", body: JSON.stringify({ mandate_hash: d.mandate_hash }) });
-      out.innerHTML = '<p class="pill ok">Mandate signed and active.</p>'; refresh(); };
+      <details open><summary class="mute">Exact mandate you will sign</summary><pre style="white-space:pre-wrap;font-size:12px">${esc(JSON.stringify(d.mandate, null, 2))}</pre></details>
+      <div class="mute">Drafted by ${esc(d.source)} · sha256 (your passkey signs this)</div><code>${esc(d.mandate_hash)}</code>
+      <div class="row2"><button class="ok" id="sign">Sign with passkey</button><button class="ghost" id="discard">Discard</button></div></div>`;
+    $("#sign").onclick = async () => { try { await reviewAndSign(d.mandate.mandate_id, true); out.innerHTML = '<p class="pill ok">Mandate signed with your passkey and active.</p>'; }
+      catch (e) { out.insertAdjacentHTML("beforeend", `<p class="warn">${esc(e.message)}</p>`); } refresh(); };
     $("#discard").onclick = async () => { await api(`/v1/mandates/${d.mandate.mandate_id}/revoke`, { method: "POST", body: JSON.stringify({ reason: "discarded draft" }) }); out.innerHTML = ""; refresh(); };
   } catch (e) { out.innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
 };
+
+// ---- WebAuthn: the user's passkey signs mandates and revocations ----
+const b64uToBuf = s => { s = s.replace(/-/g, "+").replace(/_/g, "/"); const b = atob(s + "===".slice((s.length + 3) % 4)); return Uint8Array.from(b, c => c.charCodeAt(0)).buffer; };
+const bufToB64u = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+async function passkeyRefresh() {
+  try { const r = await api(`/v1/users/${encodeURIComponent($("#user").value)}/passkey`);
+    $("#pkState").className = "pill " + (r.registered ? "ok" : "warn"); $("#pkState").textContent = r.registered ? "passkey: registered" : "passkey: none";
+    $("#pkCreate").disabled = r.registered; } catch {}
+}
+$("#pkCreate").onclick = async () => {
+  try {
+    const u = encodeURIComponent($("#user").value);
+    const o = await api(`/v1/users/${u}/passkey/options`, { method: "POST" });
+    const cred = await navigator.credentials.create({ publicKey: { ...o, challenge: b64uToBuf(o.challenge), user: { ...o.user, id: b64uToBuf(o.user.id) },
+      excludeCredentials: (o.excludeCredentials || []).map(c => ({ ...c, id: b64uToBuf(c.id) })) } });
+    const response = { id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults(),
+      authenticatorAttachment: cred.authenticatorAttachment, response: { clientDataJSON: bufToB64u(cred.response.clientDataJSON),
+        attestationObject: bufToB64u(cred.response.attestationObject), transports: cred.response.getTransports ? cred.response.getTransports() : [] } };
+    await api(`/v1/users/${u}/passkey`, { method: "POST", body: JSON.stringify({ response }) });
+  } catch (e) { alert(e.message); }
+  passkeyRefresh();
+};
+async function assertWith(o) {
+  const a = await navigator.credentials.get({ publicKey: { ...o, challenge: b64uToBuf(o.challenge), allowCredentials: (o.allowCredentials || []).map(c => ({ ...c, id: b64uToBuf(c.id) })) } });
+  return { id: a.id, rawId: bufToB64u(a.rawId), type: a.type, clientExtensionResults: a.getClientExtensionResults(), authenticatorAttachment: a.authenticatorAttachment,
+    response: { clientDataJSON: bufToB64u(a.response.clientDataJSON), authenticatorData: bufToB64u(a.response.authenticatorData), signature: bufToB64u(a.response.signature),
+      userHandle: a.response.userHandle ? bufToB64u(a.response.userHandle) : undefined } };
+}
+/** Shows the exact mandate JSON, checks its hash locally, then has the passkey sign that hash (it is the WebAuthn challenge). */
+async function reviewAndSign(id, alreadyReviewed = false) {
+  const r = await api(`/v1/mandates/${id}/sign-request`, { method: "POST" });
+  const canon = v => v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? "[" + v.map(canon).join(",") + "]"
+    : "{" + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+  const local = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canon(r.mandate))))].map(b => b.toString(16).padStart(2, "0")).join("");
+  if (local !== r.mandate_hash) throw new Error("mandate hash mismatch: refusing to sign");
+  if (bufToB64u(Uint8Array.from(local.match(/../g), h => parseInt(h, 16))) !== r.options.challenge) throw new Error("challenge is not this mandate's hash: refusing to sign");
+  if (!alreadyReviewed && !confirm(`Sign this exact mandate with your passkey?\n\n${JSON.stringify(r.mandate, null, 2)}\n\nsha256 ${r.mandate_hash}`)) return;
+  const assertion = await assertWith(r.options);
+  await api(`/v1/mandates/${id}/confirm`, { method: "POST", body: JSON.stringify({ mandate_hash: r.mandate_hash, assertion }) });
+}
+async function signedRevoke(id) {
+  const r = await api(`/v1/mandates/${id}/revoke-request`, { method: "POST" });
+  const assertion = await assertWith(r.options);
+  await api(`/v1/mandates/${id}/revoke`, { method: "POST", body: JSON.stringify({ assertion, reason: "revoked in console" }) });
+}
+$("#user").onchange = passkeyRefresh;
 
 $("#recover").onclick = async () => {
   if (!confirm("Run recovery now for payments older than 60s?")) return;
@@ -182,8 +232,8 @@ async function refresh() {
     renderApprovals(a); $("#conn").className = "pill ok"; $("#conn").textContent = "connected";
   } catch (e) { $("#conn").className = "pill bad"; $("#conn").textContent = e.message; }
 }
-$("#connect").onclick = () => { TOKEN = $("#token").value.trim(); sessionStorage.setItem("ag_token", TOKEN); refresh().then(() => $("#verify").click()); };
-if (TOKEN) { refresh(); $("#verify").click(); }
+$("#connect").onclick = () => { TOKEN = $("#token").value.trim(); sessionStorage.setItem("ag_token", TOKEN); refresh().then(() => { $("#verify").click(); passkeyRefresh(); }); };
+if (TOKEN) { refresh(); $("#verify").click(); passkeyRefresh(); }
 setInterval(refresh, 4000);
 </script>
 </body>
