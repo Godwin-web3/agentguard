@@ -11,7 +11,7 @@ import { AnchorService } from "./anchor.ts";
 import { HeuristicRiskAnalyzer, LLMRiskAnalyzer, CompositeRiskAnalyzer, type RiskAnalyzer } from "./risk.ts";
 import { PayPalClient, lazyPayPalRail, type PaymentRail } from "./paypal.ts";
 import { draftFromText, summarize, type LLMConfig } from "./drafter.ts";
-import { readFileSync } from "node:fs";
+import { siteFile } from "./site.ts";
 import { canonical } from "./canonical.ts";
 
 export interface App {
@@ -44,7 +44,6 @@ const risk: RiskAnalyzer = process.env.LLM_API_KEY
 
 const llm: LLMConfig | undefined = process.env.LLM_API_KEY
   ? { baseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1", apiKey: process.env.LLM_API_KEY, model: process.env.LLM_MODEL ?? "gpt-4o-mini" } : undefined;
-const CONSOLE_HTML = readFileSync(new URL("./console.html", import.meta.url), "utf8");
 
 const sql = opts.sql ?? await openSql();
 const store = new Store(sql);
@@ -279,10 +278,16 @@ function send(res: ServerResponse, code: number, data: unknown) {
 async function handler(rq: IncomingMessage, res: ServerResponse): Promise<unknown> {
   await signer.refresh();
   const url = new URL(rq.url ?? "/", "http://x");
-  if (rq.method === "GET" && (url.pathname === "/" || url.pathname === "/console")) {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store",
-      "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" });
-    return res.end(CONSOLE_HTML);
+  if ((rq.method === "GET" || rq.method === "HEAD") && !url.pathname.startsWith("/v1/") && !url.pathname.startsWith("/.well-known/") && !url.pathname.startsWith("/api/")) {
+    // Static site (landing, console, receipt viewer, brand). On Vercel these are served from the CDN before reaching here.
+    const f = siteFile(url.pathname);
+    if (f) { res.writeHead(200, f.headers); return res.end(rq.method === "HEAD" ? undefined : f.body); }
+  }
+  if ((rq.method === "GET" || rq.method === "HEAD") && url.pathname === "/healthz") {
+    // Liveness plus a database round-trip; reports no configuration or secrets.
+    const t0 = Date.now();
+    const db = await Promise.race([sql.prepare("SELECT 1 AS ok").get().then(() => "ok", () => "error"), new Promise<string>(r => setTimeout(r, 3000, "timeout"))]);
+    return send(res, db === "ok" ? 200 : 503, { ok: db === "ok", db, db_ms: Date.now() - t0 });
   }
   const r = routes.find(r => r.method === rq.method && r.re.test(url.pathname));
   if (!r) return send(res, 404, { error: "not found" });

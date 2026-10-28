@@ -1,0 +1,18 @@
+{
+  "issuer": "agentguard-orcin.vercel.app",
+  "keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "pgYgEtgE5iylkHeLvZnskrNGKKPhm0Bhcz2wGfo9Wio",
+      "kid": "7dc269289ef46e2f7fe086edb8686383",
+      "alg": "EdDSA",
+      "use": "sig",
+      "status": "active",
+      "created": "2026-10-28T16:23:38.786Z",
+      "retired": null,
+      "compromised_at": null,
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEApgYgEtgE5iylkHeLvZnskrNGKKPhm0Bhcz2wGfo9Wio=\n-----END PUBLIC KEY-----\n"
+    }
+  ]
+}

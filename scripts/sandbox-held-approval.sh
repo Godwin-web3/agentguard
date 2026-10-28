@@ -29,6 +29,6 @@ curl -sf "$U/v1/agent/payments/$PID/receipt" -H "Authorization: Bearer $KEY" >| 
 curl -sf "$U/.well-known/agentguard-keys" > "$OUT/agentguard-keys.json"
 echo "receipt $(jqp "d['receipt']['receipt_id'] + ' kid=' + d['signature']['kid'] + ' approval.method=' + d['receipt']['approval']['method']" < "$OUT/receipt.json")"
 V="$N packages/intent-verifier/src/cli.ts"
-echo "--- offline, pinned key set, timestamp + anchor required"; $V "$OUT/receipt.json" --issuer-keys "$OUT/agentguard-keys.json" --payee "$PAYEE" --origin "$U" --require-timestamp --require-anchor | sed 's/^/  /'
+echo "--- offline, pinned key set, timestamp + anchor required"; $V "$OUT/receipt.json" --issuer-keys "$OUT/agentguard-keys.json" --payee "$PAYEE" --origin "${AGENTGUARD_ORIGIN:-$U}" --require-timestamp --require-anchor | sed 's/^/  /'
 echo "--- live re-check with PayPal"; PAYPAL_API_BASE=https://api-m.sandbox.paypal.com $V "$OUT/receipt.json" --issuer-keys "$OUT/agentguard-keys.json" --paypal | grep -E "VALID|paypal\." | sed 's/^/  /'
 echo "audit chain: $(curl -sf "$U/v1/audit/verify" -H "$A" | jqp "d")"

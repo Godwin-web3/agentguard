@@ -25,7 +25,7 @@ async function api(method: string, path: string, body?: unknown) {
 }
 const load = (u: string) => { if (!existsSync(file(u))) throw new Error(`no dev passkey for ${u}; run register first`); return SoftAuthenticator.fromJSON(JSON.parse(readFileSync(file(u), "utf8"))); };
 const save = (u: string, a: SoftAuthenticator) => { mkdirSync("./data", { recursive: true }); writeFileSync(file(u), JSON.stringify(a.toJSON()), { mode: 0o600 }); };
-const origin = new URL(BASE).origin, rpID = process.env.AGENTGUARD_RP_ID ?? new URL(BASE).hostname;
+const origin = process.env.AGENTGUARD_ORIGIN ?? new URL(BASE).origin, rpID = process.env.AGENTGUARD_RP_ID ?? new URL(BASE).hostname;
 
 if (cmd === "register") {
   const st = await api("GET", `/v1/users/${encodeURIComponent(a1)}/passkey`);
