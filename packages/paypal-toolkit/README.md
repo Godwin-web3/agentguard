@@ -1,4 +1,4 @@
-# @agentguard/paypal-toolkit
+# @agentguard-dev/paypal-toolkit
 
 Drop-in guard for [PayPal's Agent Toolkit](https://www.npmjs.com/package/@paypal/agent-toolkit) (v1.11). Your agent keeps the
 toolkit's tools, but **money only moves through [AgentGuard](https://github.com/Godwin-web3/agentguard)**:
@@ -14,14 +14,14 @@ toolkit's tools, but **money only moves through [AgentGuard](https://github.com/
 ## Install
 
 ```bash
-npm i @agentguard/paypal-toolkit @paypal/agent-toolkit ai   # + @modelcontextprotocol/sdk for MCP
+npm i @agentguard-dev/paypal-toolkit @paypal/agent-toolkit ai   # + @modelcontextprotocol/sdk for MCP
 ```
 
 ## Usage (Vercel AI SDK)
 
 ```ts
 import { PayPalAgentToolkit, ALL_TOOLS_ENABLED } from "@paypal/agent-toolkit/ai-sdk";
-import { guardTools } from "@agentguard/paypal-toolkit/ai-sdk";
+import { guardTools } from "@agentguard-dev/paypal-toolkit/ai-sdk";
 import { generateText } from "ai";
 
 const toolkit = new PayPalAgentToolkit({ clientId, clientSecret, configuration: { actions: ALL_TOOLS_ENABLED, context: { sandbox: true } } });
@@ -36,7 +36,7 @@ const r = await generateText({ model, tools, maxSteps: 5, prompt: "Buy $10 of AP
 **MCP** (Claude Desktop, Cursor, …):
 
 ```json
-{ "mcpServers": { "paypal-guarded": { "command": "npx", "args": ["-y", "@agentguard/paypal-toolkit"],
+{ "mcpServers": { "paypal-guarded": { "command": "npx", "args": ["-y", "@agentguard-dev/paypal-toolkit"],
   "env": { "PAYPAL_CLIENT_ID": "…", "PAYPAL_CLIENT_SECRET": "…", "PAYPAL_ENVIRONMENT": "SANDBOX",
            "AGENTGUARD_URL": "…", "AGENTGUARD_API_KEY": "…", "AGENTGUARD_AGENT_ID": "…", "AGENTGUARD_MANDATE_ID": "…" } } } }
 ```

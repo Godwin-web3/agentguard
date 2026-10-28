@@ -1,5 +1,5 @@
 {
-  "name": "@agentguard/paypal-toolkit",
+  "name": "@agentguard-dev/paypal-toolkit",
   "version": "0.1.0",
   "description": "Drop-in guard for PayPal's Agent Toolkit: agents can only move money through AgentGuard, under a passkey-signed mandate checked against PayPal's own order.",
   "license": "Apache-2.0",
@@ -81,5 +81,10 @@
     "@types/node": "^22.20.5",
     "ai": "^4.3.19",
     "typescript": "^5.9.3"
-  }
+  },
+  "homepage": "https://agentguard-orcin.vercel.app",
+  "bugs": {
+    "url": "https://github.com/Godwin-web3/agentguard/issues"
+  },
+  "types": "./dist/index.d.ts"
 }

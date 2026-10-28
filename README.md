@@ -1,7 +1,7 @@
 # AgentGuard
 
 **Dispute-proof agent purchases on PayPal.**
-When an AI agent pays a merchant, AgentGuard hands both sides a signed **Proof-of-Intent receipt**: cryptographic evidence that *the user* authorized *this exact order*, checked by a deterministic policy, and that this is the capture PayPal settled. The merchant verifies it offline, with no dependency on AgentGuard, using [`@agentguard/intent-verifier`](packages/intent-verifier).
+When an AI agent pays a merchant, AgentGuard hands both sides a signed **Proof-of-Intent receipt**: cryptographic evidence that *the user* authorized *this exact order*, checked by a deterministic policy, and that this is the capture PayPal settled. The merchant verifies it offline, with no dependency on AgentGuard, using [`@agentguard-dev/intent-verifier`](packages/intent-verifier).
 
 Underneath, AgentGuard is financial authorization for agents: an agent can browse, reason and recommend, but it cannot spend outside the authority its user delegated, even if it is fully compromised by prompt injection.
 

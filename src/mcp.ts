@@ -29,7 +29,7 @@ const tools = [
       agent_rationale: { type: "string" } } } },
   { name: "get_payment_status", description: "Check a payment you proposed (e.g. one waiting for the user's approval).",
     inputSchema: { type: "object", properties: { payment_id: { type: "string" } }, required: ["payment_id"] } },
-  { name: "get_payment_receipt", description: "Fetch the signed Proof-of-Intent receipt for a captured payment: the user's passkey-signed mandate, the PayPal order snapshot, the policy decision and the capture, signed by AgentGuard. Give it to the merchant; they can verify it offline with @agentguard/intent-verifier.",
+  { name: "get_payment_receipt", description: "Fetch the signed Proof-of-Intent receipt for a captured payment: the user's passkey-signed mandate, the PayPal order snapshot, the policy decision and the capture, signed by AgentGuard. Give it to the merchant; they can verify it offline with @agentguard-dev/intent-verifier.",
     inputSchema: { type: "object", properties: { payment_id: { type: "string" } }, required: ["payment_id"] } },
 ];
 

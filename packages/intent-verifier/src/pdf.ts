@@ -8,7 +8,7 @@ export function textPdf(lines: string[], title = "AgentGuard Proof-of-Intent"): 
   const objs: string[] = [];
   objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
   objs[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>";
-  objs[4] = `<< /Title (${esc(title)}) /Producer (@agentguard/intent-verifier) >>`;
+  objs[4] = `<< /Title (${esc(title)}) /Producer (@agentguard-dev/intent-verifier) >>`;
   const kids: string[] = [];
   pages.forEach((p, i) => {
     const pageNo = 5 + i * 2, contentNo = pageNo + 1; kids.push(`${pageNo} 0 R`);

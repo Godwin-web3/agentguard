@@ -38,7 +38,7 @@ export function buildDisputeEvidence(env: Envelope, v: VerifyResult, opts: { evi
     "The buyer created a passkey-signed spending mandate for their AI agent. The PayPal order below was read",
     "from PayPal by AgentGuard, checked against every mandate rule, and only then authorized and captured.",
     "The receipt is signed by the issuer (Ed25519) and can be re-verified offline with",
-    "@agentguard/intent-verifier: `intent-verify receipt.json` (JSON is reproduced in full below).",
+    "@agentguard-dev/intent-verifier: `intent-verify receipt.json` (JSON is reproduced in full below).",
     "This is evidence of authorization. It does not by itself guarantee any dispute outcome.",
     "", `INDEPENDENT VERIFICATION (${v.ok ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED"})`,
     ...v.checks.map(c => `  [${c.pass ? "PASS" : "FAIL"}] ${c.check}: ${c.detail}`),
