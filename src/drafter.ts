@@ -176,6 +176,10 @@ export function summarize(c: MandateConstraints, ttlMinutes?: number): string[] 
   if (c.allowed_categories?.length) s.push(`Only these PayPal item categories: ${c.allowed_categories.join(", ")}.`);
   if (c.payee_allowlist?.length) s.push(`Only pay: ${c.payee_allowlist.join(", ")}.`);
   if (c.payee_blocklist?.length) s.push(`Never pay: ${c.payee_blocklist.join(", ")}.`);
+  if (c.require_merchant_order) s.push("Only pay orders the merchant created on PayPal; payee, amount and items are read from PayPal, not from the agent.");
+  if (c.sku_allowlist?.length) s.push(`Only these product SKUs: ${c.sku_allowlist.join(", ")}.`);
+  if ((c.allowed_categories?.length || c.max_quantity_per_item || c.sku_allowlist?.length) && !c.require_merchant_order)
+    s.push("Category, SKU and quantity limits can only be checked on merchant-created PayPal orders; agent-typed payments that rely on them are refused.");
   if (c.max_quantity_per_item) s.push(`At most ${c.max_quantity_per_item} of any item.`);
   if (c.require_human_approval_over) s.push(`Ask you before any payment above ${c.require_human_approval_over} ${c.currency}.`);
   if (ttlMinutes) s.push(`Expires ${ttlMinutes >= 1440 ? `in ${+(ttlMinutes / 1440).toFixed(1)} days` : ttlMinutes >= 60 ? `in ${+(ttlMinutes / 60).toFixed(1)} hours` : `in ${ttlMinutes} minutes`}, and is void the moment you revoke it.`);

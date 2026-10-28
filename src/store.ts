@@ -134,10 +134,10 @@ export class Store {
   listStuck(olderThanIso: string): PaymentRow[] {
     return this.db.prepare(`SELECT * FROM payments WHERE status IN ('reserved','authorized') AND updated_at < ? ORDER BY updated_at`).all(olderThanIso) as any[];
   }
-  insertPayment(p: Omit<PaymentRow, "paypal_order_id" | "paypal_authorization_id" | "paypal_capture_id" | "error" | "created_at" | "updated_at">): void {
+  insertPayment(p: Omit<PaymentRow, "paypal_order_id" | "paypal_authorization_id" | "paypal_capture_id" | "error" | "created_at" | "updated_at"> & { paypal_order_id?: string | null }): void {
     const now = new Date().toISOString();
-    this.db.prepare(`INSERT INTO payments (payment_id,mandate_id,agent_id,idempotency_key,proposal_hash,amount_minor,currency,status,evaluation,proposal,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(p.payment_id, p.mandate_id, p.agent_id, p.idempotency_key, p.proposal_hash, p.amount_minor, p.currency, p.status, p.evaluation, p.proposal, now, now);
+    this.db.prepare(`INSERT INTO payments (payment_id,mandate_id,agent_id,idempotency_key,proposal_hash,amount_minor,currency,status,evaluation,proposal,paypal_order_id,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(p.payment_id, p.mandate_id, p.agent_id, p.idempotency_key, p.proposal_hash, p.amount_minor, p.currency, p.status, p.evaluation, p.proposal, p.paypal_order_id ?? null, now, now);
   }
   /** Compare-and-set status transition; returns false if the row was not in `from`. */
   transition(id: string, from: PaymentStatus[], to: PaymentStatus, fields: Partial<PaymentRow> = {}): boolean {

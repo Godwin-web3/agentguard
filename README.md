@@ -98,3 +98,22 @@ Give your agent this server **instead of** direct PayPal payment tools.
 
 ## License
 Apache-2.0
+
+## Merchant orders: the PayPal order is the source of truth
+
+The agent no longer has to *describe* the purchase. The merchant creates a PayPal order (`intent: AUTHORIZE`) and the agent
+proposes only its id (`POST /v1/agent/payments {mandate_id, agent_id, idempotency_key, paypal_order_id}`, or the MCP tool
+`pay_paypal_order`). AgentGuard GETs the order from PayPal and evaluates the mandate against **PayPal's** payee, amount,
+currency and line items (SKU, category, quantity, tax/shipping/discount breakdown must reconcile). Sending `payee`,
+`currency` or `items` together with an order id is rejected. At execute time the order is re-read and must have the same
+digest, then authorized with the user's vault token, verified, and captured. An order can be paid once.
+
+New mandate constraints: `require_merchant_order: true` (refuse agent-declared purchases) and `sku_allowlist: [...]`.
+The old vaulted path (`payee`/`items` supplied by the agent) still works, but its items are **untrusted**: any
+mandate constraint that depends on them (`allowed_categories`, `max_quantity_per_item`, `sku_allowlist`) fails as
+"unverifiable" on that path; only payee allowlist + amount limits can be enforced there.
+
+Live proof: `scripts/sandbox-orders.sh` (merchant side: `scripts/merchant-order.ts`).
+
+Production limit: reading and authorizing another merchant's order needs the order to be created by the same PayPal app,
+or PayPal partner permissions (`PayPal-Auth-Assertion`). Single-purchase-unit orders only.

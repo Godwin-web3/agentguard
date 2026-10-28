@@ -22,6 +22,8 @@ const rail: PaymentRail = {
   capture: (a, r) => pp().capture(a, r),
   void: a => pp().void(a),
   getAuthorization: a => pp().getAuthorization(a),
+  getOrder: id => pp().getOrder(id),
+  authorizeOrder: (id, v, r) => pp().authorizeOrder(id, v, r),
 };
 
 const risk: RiskAnalyzer = process.env.LLM_API_KEY
