@@ -6,8 +6,8 @@ import type { Gateway } from "../../src/gateway.ts";
 export const RP = { rpID: "localhost", rpName: "AgentGuard test", origin: "http://localhost:8787" };
 
 /** Passkey service plus one enrolled software authenticator per user, and a helper that signs mandates with it. */
-export async function enrol(store: Store, users: string[] = ["u1"]) {
-  const passkeys = new PasskeyService(store, RP);
+export async function enrol(store: Store, users: string[] = ["u1"], extra: Record<string, unknown> = {}) {
+  const passkeys = new PasskeyService(store, { ...RP, ...extra });
   const auths = new Map<string, SoftAuthenticator>();
   for (const u of users) {
     const a = new SoftAuthenticator(RP.rpID, RP.origin);

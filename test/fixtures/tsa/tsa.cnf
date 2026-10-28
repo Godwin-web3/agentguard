@@ -1,0 +1,17 @@
+# Test-only TSA (never trust in production). Used by test/support/fake-tsa.ts via `openssl ts -reply`.
+[ tsa ]
+default_tsa = tsa_config
+[ tsa_config ]
+dir = .
+serial = $ENV::TSA_SERIAL
+signer_cert = $ENV::TSA_DIR/tsa.pem
+certs = $ENV::TSA_DIR/root.pem
+signer_key = $ENV::TSA_DIR/tsa.key
+signer_digest = sha256
+default_policy = 1.2.3.4.1
+digests = sha256
+accuracy = secs:1
+ordering = no
+tsa_name = yes
+ess_cert_id_chain = no
+ess_cert_id_alg = sha256

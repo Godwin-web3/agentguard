@@ -4,6 +4,9 @@ import type { IssuerSigner } from "./keys.ts";
 import type { PasskeyService } from "./passkeys.ts";
 import type { Store } from "./store.ts";
 import { buildAp2 } from "../packages/intent-verifier/src/ap2.ts";
+import type { TimestampToken } from "../packages/intent-verifier/src/tsa.ts";
+import type { Timestamper } from "./timestamp.ts";
+import type { AnchorService, AnchorProof } from "./anchor.ts";
 
 /**
  * Proof-of-Intent receipts. For every captured payment AgentGuard issues one signed, self-contained document
@@ -21,6 +24,10 @@ export const RECEIPT_SCHEMA = "agentguard.proof-of-intent/v1";
 export interface ReceiptEnvelope {
   receipt: Record<string, any> & { schema: string; receipt_id: string };
   signature: { alg: "Ed25519"; key_id: string; kid?: string; public_key_pem: string; value: string };
+  /** Unsigned, independently verifiable: RFC 3161 tokens over sha256(canonical(receipt)) from external TSAs. */
+  timestamps?: TimestampToken[];
+  /** Unsigned, independently verifiable: Merkle inclusion of the receipt's spend entries in a TSA-anchored audit head. */
+  anchor?: AnchorProof | null;
 }
 
 /** Short, stable id for a public key: first 16 bytes of sha256(SPKI DER), hex. */
@@ -41,10 +48,39 @@ export interface IssueInput {
 
 export class ReceiptService {
   private store: Store; private signer: IssuerSigner; private passkeys: PasskeyService; readonly issuer: string;
-  constructor(deps: { store: Store; signer: IssuerSigner; passkeys: PasskeyService; issuer?: string }) {
+  tsa?: Timestamper; anchors?: AnchorService;
+  constructor(deps: { store: Store; signer: IssuerSigner; passkeys: PasskeyService; issuer?: string; tsa?: Timestamper; anchors?: AnchorService }) {
     this.store = deps.store; this.signer = deps.signer; this.passkeys = deps.passkeys; this.issuer = deps.issuer ?? "agentguard";
+    this.tsa = deps.tsa; this.anchors = deps.anchors;
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS receipts (receipt_id TEXT PRIMARY KEY, payment_id TEXT NOT NULL UNIQUE,
       capture_id TEXT NOT NULL, receipt_hash TEXT NOT NULL, envelope TEXT NOT NULL, issued_at TEXT NOT NULL)`);
+    const cols = (this.store.db.prepare("PRAGMA table_info(receipts)").all() as any[]).map(c => c.name);
+    if (!cols.includes("timestamps")) this.store.db.exec("ALTER TABLE receipts ADD COLUMN timestamps TEXT");
+  }
+
+  /** Issue, then immediately obtain external timestamps (best effort; stampPending() retries). */
+  async issueAndStamp(i: IssueInput): Promise<ReceiptEnvelope> {
+    const env = this.issue(i);
+    await this.stamp(env.receipt.receipt_id);
+    return this.get(env.receipt.receipt_id)!;
+  }
+  /** Get RFC 3161 tokens over the receipt hash. The token proves the signed receipt existed at genTime. */
+  async stamp(receiptId: string): Promise<TimestampToken[]> {
+    if (!this.tsa || this.tsa.enabled === false) return [];
+    const row = this.store.db.prepare("SELECT receipt_hash, timestamps FROM receipts WHERE receipt_id=?").get(receiptId) as any;
+    if (!row) throw new Error("receipt not found");
+    const have: TimestampToken[] = row.timestamps ? JSON.parse(row.timestamps) : [];
+    if (have.length) return have;
+    const tokens = await this.tsa.stamp(row.receipt_hash);
+    if (!tokens.length) { this.store.audit("receipt.timestamp_failed", receiptId, { receipt_hash: row.receipt_hash }); return []; }
+    this.store.db.prepare("UPDATE receipts SET timestamps=? WHERE receipt_id=? AND timestamps IS NULL").run(JSON.stringify(tokens), receiptId);
+    this.store.audit("receipt.timestamped", receiptId, { receipt_hash: row.receipt_hash, tsa: tokens.map(t => ({ tsa: t.tsa, gen_time: t.gen_time ?? null })) });
+    return tokens;
+  }
+  async stampPending(): Promise<number> {
+    let n = 0;
+    for (const r of this.store.db.prepare("SELECT receipt_id FROM receipts WHERE timestamps IS NULL").all() as any[]) if ((await this.stamp(r.receipt_id)).length) n++;
+    return n;
   }
 
   issue(i: IssueInput): ReceiptEnvelope {
@@ -103,6 +139,13 @@ export class ReceiptService {
         paypal_invoice_id: i.capture.invoice_id ?? null, proposed_at: pay.created_at, captured_at: head.ts,
       },
       audit: { capture_entry_seq: head.seq, capture_entry_hash: head.hash },
+      // The mandate's full capture history up to and including this payment: hash-linked audit entries a verifier
+      // recomputes to check cumulative spend against max_total / max_transactions.
+      spend: (() => {
+        const entries = this.store.spendEntries(sm.mandate.mandate_id, head.seq);
+        const last = entries.at(-1); const lp = last ? JSON.parse(last.payload) : null;
+        return { mandate_id: sm.mandate.mandate_id, entries, count: lp?.spend_index ?? null, cumulative_minor: lp?.cumulative_minor ?? null };
+      })(),
     };
     // AP2-compatible views (Intent/Cart/Payment Mandates + receipts), derived deterministically and covered by the signature.
     (receipt as any).ap2 = buildAp2(receipt);
@@ -110,19 +153,28 @@ export class ReceiptService {
     const env: ReceiptEnvelope = { receipt, signature: { alg: "Ed25519", key_id: receipt.issuer.key_id, kid: receipt.issuer.key_id, public_key_pem: this.signer.publicKeyPem(), value: this.signer.sign(body) } };
     const receipt_hash = sha256(body);
     this.store.tx(() => {
-      this.store.db.prepare("INSERT INTO receipts VALUES (?,?,?,?,?,?)").run(receipt_id, pay.payment_id, i.capture.capture_id, receipt_hash, JSON.stringify(env), receipt.issued_at);
+      this.store.db.prepare("INSERT INTO receipts (receipt_id,payment_id,capture_id,receipt_hash,envelope,issued_at) VALUES (?,?,?,?,?,?)").run(receipt_id, pay.payment_id, i.capture.capture_id, receipt_hash, JSON.stringify(env), receipt.issued_at);
       this.store.audit("receipt.issued", pay.payment_id, { receipt_id, receipt_hash, capture_id: i.capture.capture_id });
     });
     return env;
   }
 
+  private full(r: any): ReceiptEnvelope | null {
+    if (!r) return null;
+    const env: ReceiptEnvelope = JSON.parse(r.envelope);
+    if (r.timestamps) env.timestamps = JSON.parse(r.timestamps);
+    if (this.anchors) {
+      const seqs = (env.receipt.spend?.entries ?? []).map((e: any) => e.seq);
+      if (!seqs.includes(env.receipt.audit?.capture_entry_seq)) seqs.push(env.receipt.audit?.capture_entry_seq);
+      env.anchor = this.anchors.proofFor(seqs.filter((x: any) => Number.isInteger(x)));
+    }
+    return env;
+  }
   get(receiptId: string): ReceiptEnvelope | null {
-    const r = this.store.db.prepare("SELECT envelope FROM receipts WHERE receipt_id=?").get(receiptId) as any;
-    return r ? JSON.parse(r.envelope) : null;
+    return this.full(this.store.db.prepare("SELECT envelope, timestamps FROM receipts WHERE receipt_id=?").get(receiptId));
   }
   forPayment(paymentId: string): ReceiptEnvelope | null {
-    const r = this.store.db.prepare("SELECT envelope FROM receipts WHERE payment_id=?").get(paymentId) as any;
-    return r ? JSON.parse(r.envelope) : null;
+    return this.full(this.store.db.prepare("SELECT envelope, timestamps FROM receipts WHERE payment_id=?").get(paymentId));
   }
   list(limit = 100): { receipt_id: string; payment_id: string; capture_id: string; receipt_hash: string; issued_at: string }[] {
     return this.store.db.prepare("SELECT receipt_id,payment_id,capture_id,receipt_hash,issued_at FROM receipts ORDER BY issued_at DESC LIMIT ?").all(limit) as any[];
