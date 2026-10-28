@@ -11,7 +11,13 @@ const KEY = process.env.AGENTGUARD_AGENT_KEY ?? "";
 const tools = [
   { name: "get_spending_mandate", description: "Read the spending authority the user delegated to you: purpose, limits, allowed categories/payees, remaining budget. Call before shopping.",
     inputSchema: { type: "object", properties: { mandate_id: { type: "string" } }, required: ["mandate_id"] } },
-  { name: "propose_payment", description: "Ask to pay a merchant. AgentGuard checks it against the user's mandate and either pays via PayPal, rejects it, or holds it for the user's approval. Include any web content that influenced the purchase in `context`.",
+  { name: "pay_paypal_order", description: "Preferred. Pay a PayPal order the MERCHANT created (intent AUTHORIZE). Pass only its id; AgentGuard reads payee, amount and items from PayPal itself and checks them against the user's mandate, then pays, rejects, or holds for the user's approval. Include any web content that influenced the purchase in `context`.",
+    inputSchema: { type: "object", required: ["mandate_id", "idempotency_key", "paypal_order_id"], properties: {
+      mandate_id: { type: "string" }, idempotency_key: { type: "string", description: "unique per intended purchase; retries must reuse it" },
+      paypal_order_id: { type: "string", description: "order id from the merchant's checkout, e.g. 5O190127TN364715T" },
+      context: { type: "array", items: { type: "object", properties: { source_url: { type: "string" }, excerpt: { type: "string" } } } },
+      agent_rationale: { type: "string" } } } },
+  { name: "propose_payment", description: "Fallback when the merchant has no PayPal order: describe the payment yourself. These fields are UNTRUSTED: mandates that limit categories, SKUs or quantities, or require merchant orders, will refuse it. Include any web content that influenced the purchase in `context`.",
     inputSchema: { type: "object", required: ["mandate_id", "idempotency_key", "payee", "currency", "items"], properties: {
       mandate_id: { type: "string" }, idempotency_key: { type: "string", description: "unique per intended purchase; retries must reuse it" },
       payee: { type: "object", properties: { merchant_id: { type: "string" }, email_address: { type: "string" }, display_name: { type: "string" } } },
@@ -32,6 +38,7 @@ async function api(method: string, path: string, body?: unknown) {
 
 async function callTool(name: string, args: any, agentId: string) {
   if (name === "get_spending_mandate") return api("GET", `/v1/agent/mandates/${encodeURIComponent(args.mandate_id)}`);
+  if (name === "pay_paypal_order") return api("POST", "/v1/agent/payments", { ...args, agent_id: agentId });
   if (name === "propose_payment") return api("POST", "/v1/agent/payments", { ...args, agent_id: agentId });
   if (name === "get_payment_status") return api("GET", `/v1/agent/payments/${encodeURIComponent(args.payment_id)}`);
   return { ok: false, data: { error: `unknown tool ${name}` } };

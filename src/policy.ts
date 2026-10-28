@@ -5,15 +5,20 @@ export interface SpendState { spent_minor: number; reserved_minor: number; tx_co
 
 /** Binds an approval to exact payment parameters. Changing any field yields a different hash. */
 export function proposalHash(p: PaymentProposal): string {
+  // Order-backed proposals are bound to the order id; the order's contents are bound separately by order_digest.
+  if (p.paypal_order_id) return sha256(canonical({ kind: "paypal_order", mandate_id: p.mandate_id, agent_id: p.agent_id,
+    idempotency_key: p.idempotency_key, paypal_order_id: p.paypal_order_id }));
   return sha256(canonical({ mandate_id: p.mandate_id, agent_id: p.agent_id, idempotency_key: p.idempotency_key,
     payee: p.payee, currency: p.currency, items: p.items }));
 }
 
 export function proposalAmount(p: PaymentProposal): number {
-  return p.items.reduce((s, i) => {
+  const items = p.items.reduce((s, i) => {
     if (!Number.isInteger(i.quantity) || i.quantity < 1) throw new Error(`invalid quantity for ${i.name}`);
     return s + toMinor(i.unit_amount) * i.quantity;
   }, 0);
+  // For PayPal orders the charged amount (incl. tax/shipping, already reconciled by orderFacts) is what counts.
+  return p.facts_source === "paypal_order" && p.order_total_minor !== undefined ? p.order_total_minor : items;
 }
 
 /**
@@ -46,17 +51,28 @@ export function evaluatePolicy(args: {
   add("total_limit", committed + amount <= toMinor(c.max_total), `committed ${committed} + ${amount} <= ${toMinor(c.max_total)}`);
   add("transaction_count", state.tx_count < c.max_transactions, `${state.tx_count} used of ${c.max_transactions}`);
 
+  const verified = p.facts_source === "paypal_order";
+  const UNVERIFIABLE = "unverifiable: items are agent-declared; requires a merchant-created PayPal order";
+  if (c.require_merchant_order) add("merchant_order", verified, verified ? `PayPal order ${p.paypal_order_id}` : "mandate requires a merchant-created PayPal order");
+  if (c.sku_allowlist?.length) {
+    const allow = new Set(c.sku_allowlist.map(s => s.trim()));
+    const bad = p.items.filter(i => !i.sku || !allow.has(i.sku.trim()));
+    add("sku_allowlist", verified && bad.length === 0, !verified ? UNVERIFIABLE
+      : bad.length ? `not allowlisted: ${bad.map(i => `${i.name} (sku ${i.sku ?? "none"})`).join(", ")}` : "all skus allowlisted");
+  }
   if (c.allowed_categories?.length) {
+    if (!verified) add("category", false, UNVERIFIABLE); else {
     const bad = p.items.filter(i => !c.allowed_categories!.includes(i.category));
     add("category", bad.length === 0, bad.length ? `disallowed: ${bad.map(i => `${i.name} (${i.category})`).join(", ")}` : "all items in allowed categories");
-  }
+  } }
   const payeeIds = [p.payee.merchant_id, p.payee.email_address].filter(Boolean).map(s => s!.toLowerCase());
   add("payee_identified", payeeIds.length > 0, payeeIds.length ? payeeIds.join(", ") : "no merchant_id or email");
   if (c.payee_allowlist?.length) {
     const allow = c.payee_allowlist.map(s => s.toLowerCase());
     // Every identifier must be allowlisted: PayPal routes funds by merchant_id when present, so a mixed
     // {merchant_id: attacker, email_address: allowlisted} proposal must not pass on the email alone.
-    const unknown = payeeIds.filter(id => !allow.includes(id));
+    // For a PayPal order both ids are PayPal's own record of ONE account, so either being allowlisted suffices.
+    const unknown = verified ? (payeeIds.some(id => allow.includes(id)) ? [] : payeeIds) : payeeIds.filter(id => !allow.includes(id));
     add("payee_allowlist", payeeIds.length > 0 && unknown.length === 0,
       unknown.length ? `not allowlisted: ${unknown.join(", ")}` : `payee ${payeeIds.join("/")} allowlisted`);
   }
@@ -66,7 +82,7 @@ export function evaluatePolicy(args: {
   }
   if (c.max_quantity_per_item) {
     const over = p.items.filter(i => i.quantity > c.max_quantity_per_item!);
-    add("quantity", over.length === 0, over.length ? `over limit: ${over.map(i => `${i.name} x${i.quantity}`).join(", ")}` : "ok");
+    if (!verified) add("quantity", false, UNVERIFIABLE); else add("quantity", over.length === 0, over.length ? `over limit: ${over.map(i => `${i.name} x${i.quantity}`).join(", ")}` : "ok");
   }
   if (c.require_human_approval_over && amount > toMinor(c.require_human_approval_over)) {
     needsHuman.push(`amount ${amount} exceeds human-approval threshold ${toMinor(c.require_human_approval_over)}`);

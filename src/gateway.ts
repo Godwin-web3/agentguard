@@ -1,6 +1,7 @@
 import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { canonical, sha256, toMinor } from "./canonical.ts";
 import { evaluatePolicy, proposalHash } from "./policy.ts";
+import { orderFacts, OrderError } from "./order.ts";
 import { mandateChallenge, revokeChallenge, type PasskeyService } from "./passkeys.ts";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import type { RiskAnalyzer } from "./risk.ts";
@@ -135,8 +136,8 @@ export class Gateway {
   }
 
   // ---------- payments ----------
-  async propose(authAgentId: string, p: PaymentProposal): Promise<ProposeResult> {
-    validateProposal(p);
+  async propose(authAgentId: string, body: any): Promise<ProposeResult> {
+    const p = toProposal(body);
     if (p.agent_id !== authAgentId) throw new GatewayError(403, "proposal agent_id does not match authenticated agent");
     const hash = proposalHash(p);
 
@@ -145,6 +146,11 @@ export class Gateway {
 
     const sm = this.store.getMandate(p.mandate_id);
     if (!sm) throw new GatewayError(404, "mandate not found");
+    if (p.paypal_order_id) {
+      // Source of truth: PayPal's own order record, created by the merchant. Nothing about payee/amount/items comes from the agent.
+      const f = await this.loadOrder(p.paypal_order_id);
+      Object.assign(p, { payee: f.payee, currency: f.currency, items: f.items, order_digest: f.digest, order_total_minor: f.amount_minor });
+    }
     const risk = await this.risk.analyze(sm.mandate, p);   // advisory, computed outside the lock
     const sigOk = await this.signatureValid(sm);
 
@@ -156,6 +162,10 @@ export class Gateway {
         const status = fresh.status === "active" && new Date() >= new Date(fresh.mandate.expires_at) ? "expired" : fresh.status;
         const { checks, amount_minor, needsHuman } = evaluatePolicy({ mandate: fresh.mandate, status, signatureValid: sigOk && this.sameSigned(sm, fresh),
           proposal: p, state: this.store.spendState(p.mandate_id), now: new Date() });
+        if (p.paypal_order_id) {
+          const used = this.store.db.prepare("SELECT payment_id FROM payments WHERE paypal_order_id=? AND status IN ('needs_human','reserved','authorized','captured')").get(p.paypal_order_id) as any;
+          checks.push({ check: "order_unused", pass: !used, detail: used ? `order already used by ${used.payment_id}` : "order not used by another payment" });
+        }
         const failed = checks.filter(c => !c.pass);
         const riskEscalations = risk.filter(r => r.severity !== "low").map(r => `${r.signal}: ${r.detail}`);
         const decision: Decision = failed.length ? "reject" : (needsHuman.length || riskEscalations.length) ? "needs_human" : "approve";
@@ -163,14 +173,15 @@ export class Gateway {
         const evaluation: Evaluation = { decision, proposal_hash: hash, amount_minor, checks, risk, reasons };
         const st = decision === "reject" ? "rejected" : decision === "needs_human" ? "needs_human" : "reserved";
         this.store.insertPayment({ payment_id: paymentId, mandate_id: p.mandate_id, agent_id: p.agent_id, idempotency_key: p.idempotency_key,
-          proposal_hash: hash, amount_minor, currency: p.currency, status: st, evaluation: JSON.stringify(evaluation), proposal: canonical(p) });
+          proposal_hash: hash, amount_minor, currency: p.currency, status: st, evaluation: JSON.stringify(evaluation), proposal: canonical(p),
+          paypal_order_id: p.paypal_order_id ?? null });
         let approval_id: string | undefined;
         if (decision === "needs_human") {
           approval_id = "apr_" + randomUUID();
           this.store.insertApproval({ approval_id, payment_id: paymentId, proposal_hash: hash, expires_at: new Date(Date.now() + APPROVAL_TTL_MS).toISOString() });
         }
         this.store.audit(`payment.${decision}`, paymentId, { mandate_id: p.mandate_id, agent_id: p.agent_id, proposal_hash: hash, amount_minor,
-          payee: p.payee, items: p.items, failed_checks: failed, risk, approval_id: approval_id ?? null });
+          payee: p.payee, items: p.items, facts_source: p.facts_source, paypal_order_id: p.paypal_order_id ?? null, order_digest: p.order_digest ?? null, failed_checks: failed, risk, approval_id: approval_id ?? null });
         return { payment_id: paymentId, decision, status: st, evaluation, approval_id };
       });
     } catch (e: any) {
@@ -180,6 +191,15 @@ export class Gateway {
     }
     if (result.decision === "approve") await this.execute(paymentId);
     return this.view(paymentId);
+  }
+
+  private async loadOrder(orderId: string) {
+    if (!this.rail.getOrder || !this.rail.authorizeOrder) throw new GatewayError(501, "payment rail does not support merchant orders");
+    let raw: any;
+    try { raw = await this.rail.getOrder(orderId); }
+    catch (e: any) { throw new GatewayError(e?.status === 404 ? 404 : e?.status === 400 ? 400 : 502, `PayPal order ${orderId}: ${String(e?.message).slice(0, 200)}`); }
+    try { return orderFacts(raw); }
+    catch (e) { if (e instanceof OrderError) throw new GatewayError(422, `PayPal order ${orderId} not payable: ${e.message}`); throw e; }
   }
 
   private replay(row: PaymentRow, hash: string): ProposeResult {
@@ -303,8 +323,16 @@ export class Gateway {
       this.store.audit("payment.aborted", paymentId, { reason, authorization_id: authId, state_updated: moved, ...extra });
     };
     try {
-      const auth = await this.rail.authorize({ requestId: `ag-${paymentId}`, referenceId: paymentId, vaultId: this.vaultFor(sm.mandate.user_id),
-        currency: p.currency, amountMinor: pay.amount_minor, items: p.items, payee: p.payee, description: sm.mandate.purpose });
+      let auth;
+      if (p.paypal_order_id) {
+        // Re-read the order: the merchant (or anyone holding its credentials) must not change it after we evaluated it.
+        const now = orderFacts(await this.rail.getOrder!(p.paypal_order_id));
+        if (now.digest !== p.order_digest) throw new Error(`PayPal order ${p.paypal_order_id} changed after evaluation`);
+        auth = await this.rail.authorizeOrder!(p.paypal_order_id, this.vaultFor(sm.mandate.user_id), `ag-${paymentId}`);
+      } else {
+        auth = await this.rail.authorize({ requestId: `ag-${paymentId}`, referenceId: paymentId, vaultId: this.vaultFor(sm.mandate.user_id),
+          currency: p.currency, amountMinor: pay.amount_minor, items: p.items, payee: p.payee, description: sm.mandate.purpose });
+      }
       authId = auth.authorization_id;
       // CAS reserved -> authorized. If this fails (e.g. recovery already marked it failed and released the
       // budget hold), we must never capture: void the authorization and stop.
@@ -356,6 +384,24 @@ function validateConstraints(c: MandateConstraints) {
   if (!/^[A-Z]{3}$/.test(c.currency ?? "")) throw new GatewayError(400, "constraints.currency must be ISO 4217");
   toMinor(c.max_total); if (c.max_per_transaction) toMinor(c.max_per_transaction); if (c.require_human_approval_over) toMinor(c.require_human_approval_over);
   if (!Number.isInteger(c.max_transactions) || c.max_transactions < 1 || c.max_transactions > 1000) throw new GatewayError(400, "constraints.max_transactions must be 1..1000");
+  if (c.require_merchant_order !== undefined && typeof c.require_merchant_order !== "boolean") throw new GatewayError(400, "constraints.require_merchant_order must be boolean");
+  if (c.sku_allowlist !== undefined && (!Array.isArray(c.sku_allowlist) || c.sku_allowlist.some(s => typeof s !== "string" || !s.trim() || s.length > 127)))
+    throw new GatewayError(400, "constraints.sku_allowlist must be an array of non-empty strings");
+}
+const SERVER_FIELDS = ["facts_source", "order_digest", "order_total_minor"] as const;
+/** Two request shapes. With paypal_order_id the agent may not also declare payee/currency/items: PayPal supplies them. */
+function toProposal(body: any): PaymentProposal {
+  if (!body || typeof body !== "object") throw new GatewayError(400, "body must be an object");
+  for (const k of SERVER_FIELDS) if (k in body) throw new GatewayError(400, `${k} is set by AgentGuard, not the agent`);
+  if (body.paypal_order_id !== undefined) {
+    for (const k of ["mandate_id", "agent_id", "idempotency_key", "paypal_order_id"]) if (typeof body[k] !== "string" || !body[k]) throw new GatewayError(400, `${k} is required`);
+    if (!/^[A-Z0-9]{8,32}$/.test(body.paypal_order_id)) throw new GatewayError(400, "paypal_order_id is not a PayPal order id");
+    for (const k of ["payee", "currency", "items"]) if (k in body) throw new GatewayError(400, `${k} comes from the PayPal order; do not send it with paypal_order_id`);
+    return { mandate_id: body.mandate_id, agent_id: body.agent_id, idempotency_key: body.idempotency_key, paypal_order_id: body.paypal_order_id,
+      context: body.context, agent_rationale: body.agent_rationale, payee: {}, currency: "", items: [], facts_source: "paypal_order" };
+  }
+  validateProposal(body);
+  return { ...body, facts_source: "agent_declared" };
 }
 function validateProposal(p: PaymentProposal) {
   for (const k of ["mandate_id", "agent_id", "idempotency_key", "currency"] as const) if (typeof p?.[k] !== "string" || !p[k]) throw new GatewayError(400, `${k} is required`);

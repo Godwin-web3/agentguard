@@ -12,6 +12,10 @@ export interface PaymentRail {
   void(authorizationId: string): Promise<void>;
   /** Current state of an authorization. Used by recovery after process death between authorize and capture. */
   getAuthorization(authorizationId: string): Promise<AuthorizationState>;
+  /** Raw PayPal order (GET /v2/checkout/orders/{id}): the source of truth for merchant-created orders. */
+  getOrder?(orderId: string): Promise<any>;
+  /** Authorize a merchant-created order with the user's vaulted wallet. */
+  authorizeOrder?(orderId: string, vaultId: string, requestId: string): Promise<AuthorizeResult>;
 }
 
 export interface AuthorizationState {
@@ -99,13 +103,17 @@ export class PayPalClient implements PaymentRail {
     }, { "PayPal-Request-Id": i.requestId });
     // With a vaulted PayPal wallet the order is usually authorized on create; otherwise authorize explicitly.
     if (order.status !== "COMPLETED") order = await this.call("POST", `/v2/checkout/orders/${order.id}/authorize`, {}, { "PayPal-Request-Id": `${i.requestId}-auth` });
-    const pu = order.purchase_units?.[0] ?? {};
-    const auth = pu.payments?.authorizations?.[0];
-    if (!auth) throw new Error(`PayPal returned no authorization (order ${order.id}, status ${order.status})`);
-    const [w, f = "0"] = String(auth.amount?.value ?? pu.amount?.value ?? "0").split(".");
-    return { order_id: order.id, authorization_id: auth.id, status: auth.status,
-      observed: { currency: auth.amount?.currency_code ?? pu.amount?.currency_code,
-        amountMinor: Number(w) * 100 + Number((f + "00").slice(0, 2)), payee: { merchant_id: pu.payee?.merchant_id, email_address: pu.payee?.email_address } } };
+    return observedFrom(order);
+  }
+  async getOrder(orderId: string) {
+    if (!/^[A-Z0-9]{8,32}$/.test(orderId)) throw Object.assign(new Error("invalid PayPal order id"), { status: 400 });
+    return this.call("GET", `/v2/checkout/orders/${orderId}`);
+  }
+  async authorizeOrder(orderId: string, vaultId: string, requestId: string): Promise<AuthorizeResult> {
+    if (!/^[A-Z0-9]{8,32}$/.test(orderId)) throw new Error("invalid PayPal order id");
+    const order = await this.call("POST", `/v2/checkout/orders/${orderId}/authorize`, { payment_source: { paypal: { vault_id: vaultId } } },
+      { "PayPal-Request-Id": requestId });
+    return observedFrom(order);
   }
   async capture(authorizationId: string, requestId: string) {
     const j = await this.call("POST", `/v2/payments/authorizations/${authorizationId}/capture`, { final_capture: true }, { "PayPal-Request-Id": requestId });
@@ -122,4 +130,15 @@ export class PayPalClient implements PaymentRail {
       capture_id: j.links?.find((l: any) => l.rel === "capture")?.href?.split("/").pop(),
     };
   }
+}
+
+/** What PayPal says it will charge on an authorized order. */
+function observedFrom(order: any): AuthorizeResult {
+  const pu = order.purchase_units?.[0] ?? {};
+    const auth = pu.payments?.authorizations?.[0];
+    if (!auth) throw new Error(`PayPal returned no authorization (order ${order.id}, status ${order.status})`);
+    const [w, f = "0"] = String(auth.amount?.value ?? pu.amount?.value ?? "0").split(".");
+    return { order_id: order.id, authorization_id: auth.id, status: auth.status,
+      observed: { currency: auth.amount?.currency_code ?? pu.amount?.currency_code,
+        amountMinor: Number(w) * 100 + Number((f + "00").slice(0, 2)), payee: { merchant_id: pu.payee?.merchant_id, email_address: pu.payee?.email_address } } };
 }

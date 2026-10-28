@@ -1,5 +1,5 @@
 /** PayPal item categories — grounded in PayPal order data, not agent claims. */
-export type PayPalCategory = "PHYSICAL_GOODS" | "DIGITAL_GOODS" | "DONATION";
+export type PayPalCategory = "PHYSICAL_GOODS" | "DIGITAL_GOODS" | "DONATION" | "UNSPECIFIED";  // UNSPECIFIED: order item with no category
 
 export interface MandateConstraints {
   currency: string;                 // ISO 4217, e.g. "USD"
@@ -11,6 +11,10 @@ export interface MandateConstraints {
   payee_blocklist?: string[];
   max_quantity_per_item?: number;
   require_human_approval_over?: string;   // amount above which a human must approve
+  /** Only pay merchant-created PayPal orders (the agent passes paypal_order_id; facts come from PayPal). */
+  require_merchant_order?: boolean;
+  /** Every line item's sku (as PayPal reports it on the order) must be in this list. */
+  sku_allowlist?: string[];
 }
 
 export interface Mandate {
@@ -62,6 +66,21 @@ export interface PaymentProposal {
   /** Untrusted context the agent saw (page text, tool output). Used only for risk scoring. */
   context?: { source_url?: string; excerpt?: string }[];
   agent_rationale?: string;
+  /** Set by AgentGuard, never accepted from the agent: where payee/amount/items came from. */
+  facts_source?: FactsSource;
+  /** Merchant-created PayPal order this proposal pays (facts_source = "paypal_order"). */
+  paypal_order_id?: string;
+  order_digest?: string;
+  order_total_minor?: number;
+}
+
+/** "paypal_order": read from PayPal's order record. "agent_declared": typed by the agent; untrusted. */
+export type FactsSource = "paypal_order" | "agent_declared";
+
+/** Preferred agent request: the merchant already created the PayPal order; the agent only names it. */
+export interface OrderProposal {
+  mandate_id: string; agent_id: string; idempotency_key: string; paypal_order_id: string;
+  context?: { source_url?: string; excerpt?: string }[]; agent_rationale?: string;
 }
 
 export type CheckResult = { check: string; pass: boolean; detail: string };
