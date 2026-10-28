@@ -150,6 +150,27 @@ test("API keys authenticate agents", () => {
   assert.equal(gw.authenticateAgent("ag_wrong"), null);
 });
 
+test("reconcile treats PayPal 404 as voided and leaves transient errors for retry", async () => {
+  const { store, rail, gw } = setup();
+  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one laptop",
+    constraints: { currency: "USD", max_total: "5000.00", max_transactions: 10, allowed_categories: ["PHYSICAL_GOODS"] } });
+  gw.confirmMandate(d.mandate.mandate_id, d.mandate_hash);
+  const r = await gw.propose("shopper", laptop(d.mandate.mandate_id));
+  store.transition(r.payment_id, ["captured"], "authorized");
+  store.db.prepare("UPDATE payments SET updated_at=? WHERE payment_id=?").run(new Date(Date.now() - 120_000).toISOString(), r.payment_id);
+  // Simulate PayPal returning 404 for the authorization.
+  const orig = rail.getAuthorization.bind(rail);
+  rail.getAuthorization = async (id: string) => {
+    const err: any = new Error("PayPal GET /v2/payments/authorizations/" + id + " -> 404: RESOURCE_NOT_FOUND");
+    err.status = 404;
+    throw err;
+  };
+  const rec = await gw.reconcile(60_000);
+  assert.ok(rec.actions.some(a => a.includes("voided_not_found")));
+  assert.equal(gw.view(r.payment_id).status, "voided");
+  rail.getAuthorization = orig;
+});
+
 test("reconcile finishes a payment left in authorized", async () => {
   const { store, rail, gw } = setup();
   // Mandate with room so the first capture does not exhaust it, and a purpose that matches the item.

@@ -227,9 +227,18 @@ export class Gateway {
           this.store.audit("payment.recover_unknown", pay.payment_id, { remote_status: remote.status });
           actions.push(`${pay.payment_id}:unknown_${remote.status}`);
         }
-      } catch (e) {
-        this.store.audit("payment.recover_error", pay.payment_id, { error: (e as Error).message.slice(0, 500) });
-        actions.push(`${pay.payment_id}:error`);
+      } catch (e: any) {
+        const status = e?.status ?? e?.paypal?.status;
+        // PayPal has no record of the authorization (expired and purged, or never created). Release the hold.
+        if (status === 404) {
+          this.store.transition(pay.payment_id, ["authorized", "reserved"], "voided", { error: "recovery: authorization not found on PayPal" });
+          this.store.audit("payment.recovered_voided", pay.payment_id, { reason: "authorization_not_found", status: 404 });
+          actions.push(`${pay.payment_id}:voided_not_found`);
+        } else {
+          // Transient error (network, 5xx, rate limit). Leave the row alone so the next interval retries.
+          this.store.audit("payment.recover_error", pay.payment_id, { error: String(e?.message ?? e).slice(0, 500), status: status ?? null });
+          actions.push(`${pay.payment_id}:retry`);
+        }
       }
     }
     return { scanned: stuck.length, actions };

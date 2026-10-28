@@ -85,6 +85,16 @@ route("GET", "/v1/mandates/:id", "admin", ({ params }) => gw.mandateView(params[
 route("GET", "/v1/approvals", "admin", () => store.pendingApprovals().map(a => ({ ...a, proposal: JSON.parse(a.proposal), evaluation: JSON.parse(a.evaluation) })));
 route("POST", "/v1/approvals/:id", "admin", ({ params, body }) => gw.resolveApproval(params[0], body?.approve === true, body?.approver ?? "owner"));
 route("GET", "/v1/payments", "admin", ({ query }) => store.listPayments(Number(query.get("limit") ?? 200)).map(p => ({ ...p, evaluation: JSON.parse(p.evaluation), proposal: JSON.parse(p.proposal) })));
+route("GET", "/v1/payments/stuck", "admin", ({ query }) => {
+  const older = Number(query.get("older_than_ms") ?? 60_000);
+  return store.listStuck(new Date(Date.now() - older).toISOString()).map(p => ({ ...p, evaluation: JSON.parse(p.evaluation), proposal: JSON.parse(p.proposal) }));
+});
+route("POST", "/v1/recover", "admin", async ({ body }) => {
+  const older = Number(body?.older_than_ms ?? 60_000);
+  const r = await gw.reconcile(older);
+  store.audit("recovery.manual", null, { older_than_ms: older, scanned: r.scanned, actions: r.actions });
+  return r;
+});
 route("GET", "/v1/audit", "admin", ({ query }) => store.auditLog(Number(query.get("limit") ?? 200)));
 route("GET", "/v1/audit/verify", "admin", () => store.verifyAuditChain());
 
