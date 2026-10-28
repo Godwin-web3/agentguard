@@ -54,7 +54,11 @@ export function evaluatePolicy(args: {
   add("payee_identified", payeeIds.length > 0, payeeIds.length ? payeeIds.join(", ") : "no merchant_id or email");
   if (c.payee_allowlist?.length) {
     const allow = c.payee_allowlist.map(s => s.toLowerCase());
-    add("payee_allowlist", payeeIds.some(id => allow.includes(id)), `payee ${payeeIds.join("/")} vs allowlist`);
+    // Every identifier must be allowlisted: PayPal routes funds by merchant_id when present, so a mixed
+    // {merchant_id: attacker, email_address: allowlisted} proposal must not pass on the email alone.
+    const unknown = payeeIds.filter(id => !allow.includes(id));
+    add("payee_allowlist", payeeIds.length > 0 && unknown.length === 0,
+      unknown.length ? `not allowlisted: ${unknown.join(", ")}` : `payee ${payeeIds.join("/")} allowlisted`);
   }
   if (c.payee_blocklist?.length) {
     const block = c.payee_blocklist.map(s => s.toLowerCase());
