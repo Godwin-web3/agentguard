@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node --experimental-strip-types --no-warnings src/server.ts",
     "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "test:toolkit": "cd packages/paypal-toolkit && npm ci && npm run build && npm test"
   },
   "dependencies": {
     "@simplewebauthn/server": "^14.0.3"
