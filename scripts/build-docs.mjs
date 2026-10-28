@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { buildOpenApi, ENDPOINTS } from "../docs/openapi.mjs";
 
 export const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const stripTags = s => s.replace(/<[^>]*>/g, "").replace(/[<>]/g, "");
+// Drops everything between < and > (and the brackets), so no tag can survive. Input is our own rendered markdown.
+const stripTags = s => { let out = "", depth = 0; for (const c of s) { if (c === "<") depth++; else if (c === ">") depth = Math.max(0, depth - 1); else if (!depth) out += c; } return out; };
 const slugify = s => stripTags(s.toLowerCase()).replace(/&[a-z]+;/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const COPY = '<button class="btn" type="button" data-copy style="margin-left:auto" aria-label="Copy code"><svg class="i i-sm"><use href="/brand/icons.svg#i-copy"/></svg><span>Copy</span></button>';
 
