@@ -3,3 +3,4 @@ data/
 *.db*
 *.pem
 .env
+.env.*
