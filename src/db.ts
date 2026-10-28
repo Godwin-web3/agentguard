@@ -1,3 +1,4 @@
+import { SUPABASE_ROOT_CA_2021 } from "./supabase-ca.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
@@ -93,12 +94,13 @@ export class PgSql implements Sql {
   static async open(url: string, o: { max?: number; schema?: string } = {}): Promise<PgSql> {
     if (o.schema && !/^[a-z_][a-z0-9_]*$/.test(o.schema)) throw new Error("invalid schema name");
     const pg = (await import("pg")).default;
-    // Supabase pooler presents a cert for *.pooler.supabase.com; rejectUnauthorized stays on unless the URL opts out.
+    // TLS is always verified (unless the URL says sslmode=no-verify). Supabase signs its pooler certs with its own root,
+    // so that root is pinned for *.supabase.com; AGENTGUARD_DATABASE_CA (PEM) overrides for other providers.
     const u = new URL(url); const noVerify = u.searchParams.get("sslmode") === "no-verify"; u.searchParams.delete("sslmode");
     const local = ["localhost", "127.0.0.1"].includes(u.hostname) || u.hostname.startsWith("/");
     const pool = new pg.Pool({ connectionString: u.toString(), max: o.max ?? Number(process.env.AGENTGUARD_PG_POOL ?? 3), idleTimeoutMillis: 10_000,
       ...(o.schema ? { options: `-c search_path=${o.schema}` } : {}),
-      ssl: local ? undefined : { rejectUnauthorized: !noVerify } });
+      ssl: local ? undefined : { rejectUnauthorized: !noVerify, ca: process.env.AGENTGUARD_DATABASE_CA || (/\.supabase\.(com|co)$/.test(u.hostname) ? SUPABASE_ROOT_CA_2021 : undefined) } });
     // COUNT/SUM return int8/numeric; amounts are minor units well inside 2^53, so parse as numbers like SQLite does.
     pg.types.setTypeParser(20, v => Number(v)); pg.types.setTypeParser(1700, v => Number(v));
     pool.on("error", e => console.error("[pg] idle client error", e.message));
