@@ -48,7 +48,7 @@ export function parseRules(text: string): { c: Partial<MandateConstraints>; ttl?
   if (ask) c.require_human_approval_over = amt(ask[2]);
   if (!c.max_total && !c.max_per_transaction) {
     // A bare amount with an explicit currency ("donate 25 euros") is read as the total cap.
-    const bare = [...t.matchAll(new RegExp(money, "gi"))].filter(m => m[1] || m[3]).filter(m => !ask || m.index !== ask.index + ask[0].length - m[0].length);
+    const bare = [...t.matchAll(new RegExp(money, "gi"))].filter(m => m[1] || m[3]).filter(m => !ask || m.index !== (ask.index ?? 0) + ask[0].length - m[0].length);
     if (bare.length === 1) c.max_total = amt(bare[0][2]);
   }
 

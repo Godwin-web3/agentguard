@@ -142,3 +142,13 @@ function observedFrom(order: any): AuthorizeResult {
       observed: { currency: auth.amount?.currency_code ?? pu.amount?.currency_code,
         amountMinor: Number(w) * 100 + Number((f + "00").slice(0, 2)), payee: { merchant_id: pu.payee?.merchant_id, email_address: pu.payee?.email_address } } };
 }
+
+/** The rail the server uses: every PaymentRail method (incl. merchant-order calls) bound to a lazily created PayPalClient. */
+export function lazyPayPalRail(make: () => PayPalClient = () => new PayPalClient()): Required<PaymentRail> {
+  let c: PayPalClient | null = null; const pp = () => (c ??= make());
+  return {
+    authorize: i => pp().authorize(i), capture: (a, r) => pp().capture(a, r), void: a => pp().void(a),
+    getAuthorization: a => pp().getAuthorization(a), getOrder: id => pp().getOrder(id),
+    authorizeOrder: (id, v, r) => pp().authorizeOrder(id, v, r),
+  };
+}

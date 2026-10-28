@@ -23,7 +23,30 @@ export class Gateway {
   constructor(deps: { store: Store; passkeys: PasskeyService; risk: RiskAnalyzer; rail: PaymentRail }) {
     this.store = deps.store; this.passkeys = deps.passkeys; this.risk = deps.risk; this.rail = deps.rail;
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS agents (agent_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, key_hash TEXT NOT NULL, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS wallets (user_id TEXT PRIMARY KEY, vault_id TEXT NOT NULL, payer_email TEXT, created_at TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS wallets (user_id TEXT PRIMARY KEY, vault_id TEXT NOT NULL, payer_email TEXT, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS controls (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);`);
+  }
+
+  // ---------- operator kill-switch ----------
+  /** Operator-wide pause: while set, no new payment is accepted and no reserved/approved payment moves money. */
+  pauseState(): { paused: boolean; reason?: string; by?: string; since?: string } {
+    const r = this.store.db.prepare("SELECT value FROM controls WHERE key='pause'").get() as { value: string } | undefined;
+    return r ? { paused: true, ...JSON.parse(r.value) } : { paused: false };
+  }
+  pause(reason: string, by = "operator"): { paused: boolean } {
+    const v = JSON.stringify({ reason: String(reason ?? "").slice(0, 300) || "operator pause", by: String(by).slice(0, 100), since: new Date().toISOString() });
+    this.store.db.prepare("INSERT INTO controls (key,value,updated_at) VALUES ('pause',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").run(v, new Date().toISOString());
+    this.store.audit("operator.pause", null, JSON.parse(v));
+    return this.pauseState();
+  }
+  resume(by = "operator"): { paused: boolean } {
+    this.store.db.prepare("DELETE FROM controls WHERE key='pause'").run();
+    this.store.audit("operator.resume", null, { by: String(by).slice(0, 100) });
+    return this.pauseState();
+  }
+  private assertNotPaused(): void {
+    const s = this.pauseState();
+    if (s.paused) throw new GatewayError(503, `payments paused by operator: ${s.reason}`);
   }
 
   // ---------- agents & wallets ----------
@@ -137,6 +160,7 @@ export class Gateway {
 
   // ---------- payments ----------
   async propose(authAgentId: string, body: any): Promise<ProposeResult> {
+    this.assertNotPaused();
     const p = toProposal(body);
     if (p.agent_id !== authAgentId) throw new GatewayError(403, "proposal agent_id does not match authenticated agent");
     const hash = proposalHash(p);
@@ -210,6 +234,7 @@ export class Gateway {
 
   /** Human decision on an escalated payment. Single-use, bound to the exact proposal hash, re-checks revocation. */
   async resolveApproval(approvalId: string, approve: boolean, approver: string): Promise<ProposeResult> {
+    if (approve) this.assertNotPaused();
     const a = this.store.getApproval(approvalId);
     if (!a) throw new GatewayError(404, "approval not found");
     if (a.resolved_at) throw new GatewayError(409, `approval already resolved (${a.resolution})`);
@@ -310,6 +335,7 @@ export class Gateway {
   private async execute(paymentId: string): Promise<void> {
     const pay = this.store.getPayment(paymentId)!;
     if (pay.status !== "reserved") { this.store.audit("payment.execute_skipped", paymentId, { status: pay.status }); return; }
+    if (this.pauseState().paused) { this.store.audit("payment.execute_blocked_paused", paymentId, {}); return; }
     const p: PaymentProposal = JSON.parse(pay.proposal);
     const sm = this.store.getMandate(pay.mandate_id)!;
     let authId: string | null = null;
