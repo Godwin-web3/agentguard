@@ -7,6 +7,7 @@ import { buildDisputeEvidence, submitDisputeEvidence } from "./evidence.ts";
 const USAGE = `intent-verify: verify an AgentGuard Proof-of-Intent receipt, offline by default.
 
   intent-verify <receipt.json> [options]
+  intent-verify ap2 <receipt.json>          print the receipt's AP2 mandates (Intent/Cart/Payment) as JSON
   intent-verify evidence <receipt.json> --out <dir> [--evidence-type T] [--submit <dispute_id>] [options]
 
 Options:
@@ -27,6 +28,7 @@ async function main(argv: string[]) {
   const json = flag("--json"), live = flag("--paypal");
   const keyFile = one("--issuer-key"), origins = many("--origin"), payees = many("--payee");
   const out = one("--out"), submit = one("--submit"), evType = one("--evidence-type");
+  if (args[0] === "ap2") { const e = JSON.parse(readFileSync(args[1], "utf8")); if (!e?.receipt?.ap2) { console.error("receipt has no AP2 views"); return 1; } console.log(JSON.stringify(e.receipt.ap2, null, 2)); return 0; }
   const file = args[0]; if (!file) { console.error(USAGE); return 2; }
   let env: any; try { env = JSON.parse(readFileSync(file, "utf8")); } catch (e) { console.error(`cannot read ${file}: ${(e as Error).message}`); return 2; }
   const creds = () => {
