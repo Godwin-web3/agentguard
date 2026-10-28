@@ -117,43 +117,49 @@ test("enrollment: tokens are hashed at rest, single-use, expiring and bound to o
   assert.equal(pk.enrollmentFor("alice")!.via, "admin_link");
 });
 
-test("enrollment: replacing a passkey needs an admin link (logged, shown on receipts) or the existing passkey", async () => {
+test("enrollment: an admin link cannot replace a passkey outright; the existing passkey can (logged, shown on receipts)", async () => {
   const { gw, passkeys, auths, store, rail, mid, receipts, issuer } = await setup();
   const old = auths.get("u1")!;
-  // admin-issued replacement link
+  // admin-issued link for a user who has a passkey only starts a time-locked recovery
   const t = passkeys.issueEnrollment("u1", { issuedBy: "ops-alice" });
-  assert.equal(t.replaces, old.id);
+  assert.equal(t.replaces, old.id); assert.equal(t.via, "recovery");
+  const parked = new SoftAuthenticator();
+  const res = await passkeys.verifyRegistration(t.token, parked.register(await passkeys.registrationOptions(t.token)) as any);
+  assert.ok(res.pending_recovery); assert.equal(passkeys.credentialFor("u1")!.credential_id, old.id);
+  assert.ok(!store.auditLog(50).some(e => e.event === "passkey.replaced"));
+  // the user cancels with the current passkey
+  const cr = await passkeys.recoveryCancelRequest("u1");
+  await passkeys.cancelRecovery("u1", old.assert(cr.options.challenge) as any);
+  assert.equal(passkeys.recoveryFor("u1")!.status, "cancelled");
+  // passkey-authorized replacement: immediate, old-key mandates frozen until re-signed
+  const r1 = await passkeys.reenrollRequest("u1");
+  const minted = await passkeys.reenroll("u1", old.assert(r1.options.challenge) as any);
+  assert.equal(minted.replaces, old.id);
   const fresh = new SoftAuthenticator();
-  const res = await passkeys.verifyRegistration(t.token, fresh.register(await passkeys.registrationOptions(t.token)) as any);
-  assert.equal(res.enrollment.replaces, old.id);
-  assert.ok(store.auditLog(50).some(e => e.event === "passkey.replaced"));
-  assert.ok(store.auditLog(50).some(e => e.event === "enrollment.issued" && (e.payload as any).replaces === old.id));
-  // mandates signed by the old key are no longer enforced
+  await passkeys.verifyRegistration(minted.token, fresh.register(await passkeys.registrationOptions(minted.token)) as any);
+  assert.equal(passkeys.enrollmentFor("u1")!.via, "passkey");
+  assert.ok(store.auditLog(80).some(e => e.event === "passkey.replaced"));
+  assert.equal(store.getMandate(mid)!.status, "frozen");
   rail.orders.set("ORDERREKY1", order("ORDERREKY1", [STAND]));
   assert.equal((await gw.propose("shopper", pay(mid, "ORDERREKY1"))).decision, "reject");
-  // re-sign with new key: receipt shows the replacement provenance
-  auths.set("u1", fresh);
-  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "stand", constraints: { currency: "USD", max_total: "100.00", max_transactions: 2, require_merchant_order: true, payee_allowlist: ["store@business.example.com"] } });
-  const sreq = await gw.signingRequest(d.mandate.mandate_id);
-  await gw.confirmMandate(d.mandate.mandate_id, d.mandate_hash, fresh.assert(sreq.options.challenge) as any);
+  // re-sign the frozen mandate with the new key: it is enforced again and the receipt shows the provenance
+  const sreq = await gw.signingRequest(mid);
+  const sm = store.getMandate(mid)!;
+  await gw.confirmMandate(mid, sm.mandate_hash, fresh.assert(sreq.options.challenge) as any);
+  assert.equal(store.getMandate(mid)!.status, "active");
   rail.orders.set("ORDERREKY2", order("ORDERREKY2", [STAND]));
-  const p = await gw.propose("shopper", pay(d.mandate.mandate_id, "ORDERREKY2")); assert.equal(p.status, "captured");
+  const p = await gw.propose("shopper", pay(mid, "ORDERREKY2")); assert.equal(p.status, "captured");
   const env = receipts.forPayment(p.payment_id)!;
   assert.equal(env.receipt.mandate.passkey.enrollment.replaces, old.id);
-  assert.equal(env.receipt.mandate.passkey.enrollment.issued_by, "ops-alice");
   const v = await verifyReceipt(env, { issuerPublicKeyPem: issuer.publicKeyPem() });
-  assert.equal(v.ok, true, JSON.stringify(failed(v))); assert.ok(v.warnings.some(w => /replaced/.test(w)));
-  // a stale replacement link (issued before the swap) cannot be used
+  assert.equal(v.ok, true, JSON.stringify(failed(v))); assert.ok(v.checks.some(c => c.check === "passkey.provenance" && c.pass));
+  // a stale link (issued before the swap) cannot be used; an old passkey cannot authorize re-enrollment
   const stale = passkeys.issueEnrollment("u1");
-  const third = new SoftAuthenticator();
   const so = await passkeys.registrationOptions(stale.token);
   const r2 = await passkeys.reenrollRequest("u1");
-  const minted = await passkeys.reenroll("u1", fresh.assert(r2.options.challenge) as any);
-  assert.equal(minted.replaces, fresh.id);
-  await passkeys.verifyRegistration(minted.token, third.register(await passkeys.registrationOptions(minted.token)) as any);
-  assert.equal(passkeys.enrollmentFor("u1")!.via, "passkey");
+  const m2 = await passkeys.reenroll("u1", fresh.assert(r2.options.challenge) as any);
+  await passkeys.verifyRegistration(m2.token, new SoftAuthenticator().register(await passkeys.registrationOptions(m2.token)) as any);
   await assert.rejects(passkeys.verifyRegistration(stale.token, new SoftAuthenticator().register(so) as any), /no pending|changed since/);
-  // passkey-authorized re-enrollment needs the current passkey, not an old one
   const r3 = await passkeys.reenrollRequest("u1");
   await assert.rejects(passkeys.reenroll("u1", old.assert(r3.options.challenge) as any), /not from this user's passkey|rejected/);
 });

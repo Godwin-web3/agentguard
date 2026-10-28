@@ -29,7 +29,7 @@ export interface Mandate {
 }
 
 /** "unsigned": legacy mandate activated before user-held keys existed. Never enforced until the user re-signs it. */
-export type MandateStatus = "draft" | "unsigned" | "active" | "revoked" | "exhausted" | "expired";
+export type MandateStatus = "draft" | "unsigned" | "active" | "frozen" | "revoked" | "exhausted" | "expired";
 
 /** A WebAuthn assertion from the user's passkey whose challenge is the signed digest. All fields base64url. */
 export interface UserSignature {
