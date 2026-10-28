@@ -1,4 +1,5 @@
-import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, sign, verify, type KeyObject } from "node:crypto";
+import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, createCipheriv, createDecipheriv, randomBytes, sign, verify, type KeyObject } from "node:crypto";
+import type { Sql } from "./db.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -48,20 +49,63 @@ export function kidOf(pubPem: string): string {
  */
 export class KeyRing implements IssuerSigner {
   private recs: IssuerKeyRecord[]; private path: string | null;
+  private db: { sql: Sql; master: Buffer; loadedAt: number } | null = null;
   constructor(recs: IssuerKeyRecord[], path: string | null) { this.recs = recs; this.path = path; if (!this.activeRec()) throw new Error("key ring has no active key"); }
+
+  /**
+   * Serverless key ring: records live in the issuer_keys table, private keys AES-256-GCM encrypted under
+   * AGENTGUARD_KEYRING_KEY (an env secret; never on disk, never in the DB). Seeded once from AGENTGUARD_SIGNING_KEY.
+   */
+  static async fromDb(sql: Sql, masterSecret = process.env.AGENTGUARD_KEYRING_KEY): Promise<KeyRing> {
+    if (!masterSecret || masterSecret.length < 32) throw new Error("AGENTGUARD_KEYRING_KEY (>=32 chars) is required for the database key ring");
+    const master = createHash("sha256").update("agentguard-keyring-v1|" + masterSecret).digest();
+    sql.ddl(`CREATE TABLE IF NOT EXISTS issuer_keys (kid TEXT PRIMARY KEY, ord INTEGER NOT NULL, created TEXT, retired TEXT, compromised_at TEXT, enc_private TEXT NOT NULL)`);
+    let recs = await KeyRing.readDb(sql, master);
+    if (!recs.length) {
+      const pem = process.env.AGENTGUARD_SIGNING_KEY;
+      if (!pem) throw new Error("AGENTGUARD_SIGNING_KEY (Ed25519 PKCS#8 PEM) is required to seed the database key ring");
+      const s = new Signer(createPrivateKey(pem));
+      const rec: IssuerKeyRecord = { kid: kidOf(s.publicKeyPem()), created: new Date().toISOString(), retired: null, private_pem: createPrivateKey(pem).export({ type: "pkcs8", format: "pem" }).toString() };
+      await sql.tx(async () => { await sql.prepare("INSERT INTO issuer_keys (kid,ord,created,retired,compromised_at,enc_private) VALUES (?,?,?,?,?,?) ON CONFLICT(kid) DO NOTHING")
+        .run(rec.kid, 0, rec.created, null, null, seal(master, rec.kid, rec.private_pem)); });
+      recs = await KeyRing.readDb(sql, master);
+    }
+    const ring = new KeyRing(recs, null); ring.db = { sql, master, loadedAt: Date.now() };
+    return ring;
+  }
+  private static async readDb(sql: Sql, master: Buffer): Promise<IssuerKeyRecord[]> {
+    return (await sql.prepare("SELECT * FROM issuer_keys ORDER BY ord").all()).map(r => ({ kid: r.kid, created: r.created ?? null, retired: r.retired ?? null,
+      compromised_at: r.compromised_at ?? null, private_pem: open(master, r.kid, r.enc_private) }));
+  }
+  /** Pick up rotations made by other instances (at most every maxAgeMs). */
+  async refresh(maxAgeMs = 10_000): Promise<void> {
+    if (!this.db || Date.now() - this.db.loadedAt < maxAgeMs) return;
+    const recs = await KeyRing.readDb(this.db.sql, this.db.master);
+    if (recs.length) this.recs = recs;
+    this.db.loadedAt = Date.now();
+  }
 
   static load(path = process.env.AGENTGUARD_KEYRING_FILE ?? "./data/issuer-keys.json"): KeyRing {
     if (existsSync(path)) return new KeyRing(JSON.parse(readFileSync(path, "utf8")).keys, path);
     const seed = Signer.load();
     const pem = (seed as any).priv.export({ type: "pkcs8", format: "pem" }).toString();
     const ring = new KeyRing([{ kid: kidOf(seed.publicKeyPem()), created: null /* legacy key: creation time unknown, so no lower bound */, retired: null, private_pem: pem }], path);
-    ring.save(); return ring;
+    void ring.save(); return ring;
   }
   static ephemeral(): KeyRing {
     const k = generateKeyPairSync("ed25519").privateKey; const s = new Signer(k);
     return new KeyRing([{ kid: kidOf(s.publicKeyPem()), created: new Date().toISOString(), retired: null, private_pem: k.export({ type: "pkcs8", format: "pem" }).toString() }], null);
   }
-  private save() {
+  private async save(): Promise<void> {
+    if (this.db) {
+      const { sql, master } = this.db;
+      await sql.tx(async () => {
+        for (const [i, r] of this.recs.entries()) await sql.prepare(`INSERT INTO issuer_keys (kid,ord,created,retired,compromised_at,enc_private) VALUES (?,?,?,?,?,?)
+          ON CONFLICT(kid) DO UPDATE SET retired=excluded.retired, compromised_at=excluded.compromised_at`).run(r.kid, i, r.created, r.retired, r.compromised_at ?? null, seal(master, r.kid, r.private_pem));
+      });
+      this.db.loadedAt = Date.now();
+      return;
+    }
     if (!this.path) return;
     mkdirSync(dirname(this.path), { recursive: true });
     const tmp = this.path + ".tmp";
@@ -75,12 +119,13 @@ export class KeyRing implements IssuerSigner {
   publicKeyPem(): string { return this.active().publicKeyPem(); }
 
   /** Retire the active key (kept for verification) and start signing with a fresh one. */
-  rotate(at = new Date()): { retired: string; active: string } {
+  async rotate(at = new Date()): Promise<{ retired: string; active: string }> {
+    await this.refresh(0);
     const cur = this.activeRec()!;
     const k = generateKeyPairSync("ed25519").privateKey; const s = new Signer(k);
     const next: IssuerKeyRecord = { kid: kidOf(s.publicKeyPem()), created: at.toISOString(), retired: null, private_pem: k.export({ type: "pkcs8", format: "pem" }).toString() };
     cur.retired = at.toISOString();
-    this.recs.push(next); this.save();
+    this.recs.push(next); await this.save();
     return { retired: cur.kid, active: next.kid };
   }
   /**
@@ -88,13 +133,14 @@ export class KeyRing implements IssuerSigner {
    * anything signed by it unless an independent RFC 3161 timestamp proves the receipt existed before `at`
    * (the attacker can backdate issued_at, but cannot backdate a TSA's genTime).
    */
-  markCompromised(kid: string, at = new Date()): { kid: string; compromised_at: string; active: string } {
+  async markCompromised(kid: string, at = new Date()): Promise<{ kid: string; compromised_at: string; active: string }> {
+    await this.refresh(0);
     const rec = this.recs.find(r => r.kid === kid);
     if (!rec) throw Object.assign(new Error(`unknown kid ${kid}`), { code: 404 });
-    if (!rec.retired) this.rotate(at);
+    if (!rec.retired) await this.rotate(at);
     const iso = at.toISOString();
     rec.compromised_at = rec.compromised_at && rec.compromised_at < iso ? rec.compromised_at : iso;
-    this.save();
+    await this.save();
     return { kid, compromised_at: rec.compromised_at, active: this.activeKid() };
   }
   jwks(): { keys: IssuerJwk[] } {
@@ -105,4 +151,16 @@ export class KeyRing implements IssuerSigner {
         created: r.created, retired: r.retired, compromised_at: r.compromised_at ?? null, public_key_pem: pub.export({ type: "spki", format: "pem" }).toString() } as IssuerJwk;
     }) };
   }
+}
+
+function seal(master: Buffer, kid: string, pem: string): string {
+  const iv = randomBytes(12); const c = createCipheriv("aes-256-gcm", master, iv); c.setAAD(Buffer.from(kid));
+  const ct = Buffer.concat([c.update(pem, "utf8"), c.final()]);
+  return "v1." + Buffer.concat([iv, c.getAuthTag(), ct]).toString("base64");
+}
+function open(master: Buffer, kid: string, enc: string): string {
+  if (!enc.startsWith("v1.")) throw new Error("unknown issuer key envelope");
+  const b = Buffer.from(enc.slice(3), "base64");
+  const d = createDecipheriv("aes-256-gcm", master, b.subarray(0, 12)); d.setAAD(Buffer.from(kid)); d.setAuthTag(b.subarray(12, 28));
+  return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString("utf8");
 }

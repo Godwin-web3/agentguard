@@ -11,16 +11,16 @@ test("operator pause blocks all new payments and approvals; resume restores; bot
   rail.orders.set("ORDERBIG001", order("ORDERBIG001", [{ ...item[0], unit: "60.00" }]));
   const held = await gw.propose("shopper", pay(mid, "ORDERBIG001") as any);
   assert.equal(held.status, "needs_human");
-  gw.pause("incident #1", "ops");
-  assert.equal(gw.pauseState().paused, true);
+  await gw.pause("incident #1", "ops");
+  assert.equal((await gw.pauseState()).paused, true);
   rail.orders.set("ORDERP00001", order("ORDERP00001", item));
   await assert.rejects(gw.propose("shopper", pay(mid, "ORDERP00001") as any), (e: any) => e.code === 503 && /paused by operator: incident #1/.test(e.message));
   await assert.rejects(approver(gw, auths, held.approval_id!, true, "owner"), /paused/);
   assert.ok(!rail.calls.some(c => c.startsWith("authorizeOrder") || c.startsWith("capture")), "no money moved while paused");
-  gw.resume("ops");
+  await gw.resume("ops");
   const r = await gw.propose("shopper", pay(mid, "ORDERP00001") as any);
   assert.equal(r.status, "captured");
-  const ev = store.auditLog(500).map((a: any) => a.event);
+  const ev = (await store.auditLog(500)).map((a: any) => a.event);
   assert.ok(ev.includes("operator.pause") && ev.includes("operator.resume"));
 });
 
@@ -32,6 +32,6 @@ test("server wires every PaymentRail method, including merchant-order calls", ()
     assert.equal(typeof (rail as any)[m], "function", m); (rail as any)[m]("X", "Y", "Z");
   }
   assert.deepEqual(made, ["authorize", "capture", "void", "getAuthorization", "getOrder", "authorizeOrder"]);
-  const src = readFileSync(new URL("../src/server.ts", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
   assert.match(src, /const rail: PaymentRail = lazyPayPalRail\(pp\)/, "server must use the full rail");
 });

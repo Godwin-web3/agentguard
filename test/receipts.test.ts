@@ -26,7 +26,7 @@ async function captured(extra: any = {}) {
 test("captured merchant-order payment gets a signed receipt that verifies offline with a pinned key", async () => {
   const { r, receipts, issuer, rail, store } = await captured();
   assert.equal(r.status, "captured");
-  const env = receipts.forPayment(r.payment_id)!;
+  const env = (await receipts.forPayment(r.payment_id))!;
   assert.equal(env.receipt.schema, RECEIPT_SCHEMA);
   assert.equal(env.receipt.payment.capture_id, "C-A-ORDERPOI001");
   assert.equal(env.receipt.order.snapshot.id, "ORDERPOI001");
@@ -35,10 +35,10 @@ test("captured merchant-order payment gets a signed receipt that verifies offlin
   // Receipt reference stamped on PayPal's capture.
   assert.deepEqual(rail.captureOpts.at(-1).invoice_id, receiptReference(env.receipt.receipt_id));
   assert.equal(env.receipt.payment.paypal_invoice_id, receiptReference(env.receipt.receipt_id));
-  assert.deepEqual(receipts.get(env.receipt.receipt_id), env);
+  assert.deepEqual(await receipts.get(env.receipt.receipt_id), env);
   assert.ok(issuer.verify(canonical(env.receipt), env.signature.value));
-  assert.equal(store.verifyAuditChain().ok, true);
-  assert.ok(store.db.prepare("SELECT 1 FROM audit WHERE event='receipt.issued' AND ref=?").get(r.payment_id));
+  assert.equal((await store.verifyAuditChain()).ok, true);
+  assert.ok(await store.db.prepare("SELECT 1 FROM audit WHERE event='receipt.issued' AND ref=?").get(r.payment_id));
 
   const v = await verifyReceipt(env, { issuerPublicKeyPem: issuer.publicKeyPem(), expectedOrigins: ["http://localhost:8787"], expectedPayee: ["M32J3M4A7KASQ"] });
   assert.deepEqual(failed(v), []); assert.equal(v.ok, true); assert.equal(v.trusted_issuer, true);
@@ -50,7 +50,7 @@ test("captured merchant-order payment gets a signed receipt that verifies offlin
 
 test("tampered receipt fails: any edit breaks the issuer signature; re-signing with another key fails under the pinned key", async () => {
   const { r, receipts, issuer } = await captured();
-  const env = receipts.forPayment(r.payment_id)!;
+  const env = (await receipts.forPayment(r.payment_id))!;
   for (const edit of [
     (x: any) => { x.receipt.order.snapshot.purchase_units[0].amount.value = "4.20"; },
     (x: any) => { x.receipt.payment.capture_id = "OTHER"; },
@@ -68,26 +68,26 @@ test("tampered receipt fails: any edit breaks the issuer signature; re-signing w
 
 test("swapped order fails even if the issuer itself re-signs it", async () => {
   const { r, receipts, issuer } = await captured();
-  const env = structuredClone(receipts.forPayment(r.payment_id)!);
+  const env = structuredClone(await receipts.forPayment(r.payment_id))!;
   // Same id, different contents (a different SKU and price than what was evaluated).
   env.receipt.order.snapshot = order("ORDERPOI001", [{ name: "Gift card", sku: "GIFT-500", category: "DIGITAL_GOODS", quantity: 1, unit: "39.00" }], { tax: 300 });
   let v = await verifyReceipt(resign(env, issuer), { issuerPublicKeyPem: issuer.publicKeyPem() });
   assert.equal(v.ok, false);
   for (const c of ["order.digest", "mandate.sku_allowlist", "mandate.category"]) assert.ok(failed(v).includes(c), c);
   // A different order id entirely: the decision's proposal hash no longer binds.
-  const env2 = structuredClone(receipts.forPayment(r.payment_id)!);
+  const env2 = structuredClone(await receipts.forPayment(r.payment_id))!;
   env2.receipt.order.snapshot = order("ORDERPOI002", [STAND], { tax: 300 }); env2.receipt.order.paypal_order_id = "ORDERPOI002";
   v = await verifyReceipt(resign(env2, issuer), { issuerPublicKeyPem: issuer.publicKeyPem() });
   assert.ok(failed(v).includes("decision.proposal_hash")); assert.ok(failed(v).includes("order.digest"));
   // Merchant pins its own payee: an order paying someone else is rejected.
-  const env3 = structuredClone(receipts.forPayment(r.payment_id)!);
+  const env3 = structuredClone(await receipts.forPayment(r.payment_id))!;
   v = await verifyReceipt(env3, { issuerPublicKeyPem: issuer.publicKeyPem(), expectedPayee: ["SOMEONE-ELSE"] });
   assert.ok(failed(v).includes("order.expected_payee"));
 });
 
 test("forged mandate fails: edited limits, a recomputed hash, or another passkey", async () => {
   const { r, receipts, issuer } = await captured();
-  const base = receipts.forPayment(r.payment_id)!;
+  const base = (await receipts.forPayment(r.payment_id))!;
   // 1. Edit the mandate body: hash mismatch.
   let e = structuredClone(base); e.receipt.mandate.body.constraints.max_total = "5000.00";
   let v = await verifyReceipt(resign(e, issuer), { issuerPublicKeyPem: issuer.publicKeyPem() });
@@ -115,9 +115,9 @@ test("approval-held payment: receipt records the human approval; denied payments
   const { gw, rail, mid, receipts, issuer, auths } = await setup({ require_human_approval_over: "20.00" });
   rail.orders.set("ORDERPOI009", order("ORDERPOI009", [STAND]));
   const r = await gw.propose("shopper", pay(mid, "ORDERPOI009"));
-  assert.equal(r.status, "needs_human"); assert.equal(receipts.forPayment(r.payment_id), null);
+  assert.equal(r.status, "needs_human"); assert.equal(await receipts.forPayment(r.payment_id), null);
   await approver(gw, auths, r.approval_id!, true, "owner");
-  const env = receipts.forPayment(r.payment_id)!;
+  const env = (await receipts.forPayment(r.payment_id))!;
   assert.equal(env.receipt.approval.resolution, "approved"); assert.equal(env.receipt.approval.approver, "owner");
   const v = await verifyReceipt(env, { issuerPublicKeyPem: issuer.publicKeyPem() });
   assert.equal(v.ok, true, JSON.stringify(failed(v))); assert.equal(env.receipt.approval.method, "passkey");
@@ -125,12 +125,12 @@ test("approval-held payment: receipt records the human approval; denied payments
 
   rail.orders.set("ORDERPOIBAD", order("ORDERPOIBAD", [{ ...STAND, sku: "NOPE" }]));
   const d = await gw.propose("shopper", pay(mid, "ORDERPOIBAD"));
-  assert.equal(d.decision, "reject"); assert.equal(receipts.forPayment(d.payment_id), null);
+  assert.equal(d.decision, "reject"); assert.equal(await receipts.forPayment(d.payment_id), null);
 });
 
 test("PayPal re-check with merchant keys: confirms capture and reference; flags a changed order", async () => {
   const { r, receipts, issuer } = await captured();
-  const env = receipts.forPayment(r.payment_id)!;
+  const env = (await receipts.forPayment(r.payment_id))!;
   const live = structuredClone(env.receipt.order.snapshot); live.status = "COMPLETED";
   live.purchase_units[0].payments = { captures: [{ id: env.receipt.payment.capture_id, status: "COMPLETED", amount: { currency_code: "USD", value: "42.00" }, invoice_id: env.receipt.payment.paypal_invoice_id }] };
   const fake = (o: any) => (async (url: string) => url.endsWith("/token") ? new Response(JSON.stringify({ access_token: "t" })) : new Response(JSON.stringify(o))) as any;
@@ -144,7 +144,7 @@ test("PayPal re-check with merchant keys: confirms capture and reference; flags 
 
 test("dispute evidence: provide-evidence input + PDF, submitted as multipart with input and file1", async () => {
   const { r, receipts, issuer } = await captured();
-  const env = receipts.forPayment(r.payment_id)!;
+  const env = (await receipts.forPayment(r.payment_id))!;
   const v = await verifyReceipt(env, { issuerPublicKeyPem: issuer.publicKeyPem() });
   const ev = buildDisputeEvidence(env, v);
   assert.equal(ev.input.evidences[0].evidence_type, "PROOF_OF_RECEIPT_COPY");
@@ -166,7 +166,7 @@ test("dispute evidence: provide-evidence input + PDF, submitted as multipart wit
 
 test("intent-verify CLI: exit 0 on a valid receipt, 1 on a tampered one", async () => {
   const { r, receipts, issuer } = await captured();
-  const env = receipts.forPayment(r.payment_id)!;
+  const env = (await receipts.forPayment(r.payment_id))!;
   const dir = mkdtempSync(join(tmpdir(), "poi-"));
   writeFileSync(join(dir, "r.json"), JSON.stringify(env)); writeFileSync(join(dir, "k.pem"), issuer.publicKeyPem());
   const t = structuredClone(env); t.receipt.payment.amount_minor = 1; writeFileSync(join(dir, "t.json"), JSON.stringify(t));

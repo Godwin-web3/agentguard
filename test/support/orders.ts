@@ -1,3 +1,4 @@
+import { testSql } from "./db.ts";
 import { AnchorService } from "../../src/anchor.ts";
 import type { Timestamper } from "../../src/timestamp.ts";
 import { Store } from "../../src/store.ts";
@@ -36,14 +37,14 @@ export class OrderRail implements PaymentRail {
 }
 
 export async function setup(c: Partial<MandateConstraints> = {}, o: { issuer?: any; tsa?: Timestamper; pk?: Record<string, unknown> } = {}) {
-  const store = new Store(":memory:"); const rail = new OrderRail();
+  const store = new Store(await testSql()); const rail = new OrderRail();
   const { passkeys, auths } = await enrol(store, ["u1"], o.pk);
   const issuer = o.issuer ?? Signer.ephemeral();
   const anchors = o.tsa ? new AnchorService({ store, tsa: o.tsa, issuer: "test-issuer" }) : undefined;
   const receipts = new ReceiptService({ store, signer: issuer, passkeys, issuer: "test-issuer", tsa: o.tsa, anchors });
   const gw = new Gateway({ store, passkeys, risk: new HeuristicRiskAnalyzer(), rail, receipts });
-  gw.linkWallet("u1", "VAULT-1"); gw.registerAgent("u1", "shopper");
-  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy a laptop stand and laptop charger",
+  await gw.linkWallet("u1", "VAULT-1"); await gw.registerAgent("u1", "shopper");
+  const d = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy a laptop stand and laptop charger",
     constraints: { currency: "USD", max_total: "200.00", max_transactions: 3, payee_allowlist: [MERCHANT.email_address], require_merchant_order: true,
       sku_allowlist: ["STAND-1", "CHARGER-65W"], allowed_categories: ["PHYSICAL_GOODS"], max_quantity_per_item: 2, ...c } });
   await signer(gw, auths)(d.mandate.mandate_id, d.mandate_hash);

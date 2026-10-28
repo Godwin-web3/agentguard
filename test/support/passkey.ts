@@ -11,7 +11,7 @@ export async function enrol(store: Store, users: string[] = ["u1"], extra: Recor
   const auths = new Map<string, SoftAuthenticator>();
   for (const u of users) {
     const a = new SoftAuthenticator(RP.rpID, RP.origin);
-    const { token } = passkeys.issueEnrollment(u, { issuedBy: "test" });
+    const { token } = await passkeys.issueEnrollment(u, { issuedBy: "test" });
     await passkeys.verifyRegistration(token, a.register(await passkeys.registrationOptions(token)) as any);
     auths.set(u, a);
   }
