@@ -5,6 +5,7 @@ import { orderFacts, OrderError } from "./order.ts";
 import { mandateChallenge, revokeChallenge, type PasskeyService } from "./passkeys.ts";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import type { RiskAnalyzer } from "./risk.ts";
+import { receiptIdFor, receiptReference, type ReceiptService } from "./receipt.ts";
 import type { PaymentRail } from "./paypal.ts";
 import type { Store, PaymentRow, PaymentStatus } from "./store.ts";
 import type { Decision, Evaluation, Mandate, MandateConstraints, PaymentProposal, SignedMandate, UserSignature } from "./types.ts";
@@ -19,9 +20,9 @@ export class GatewayError extends Error { code: number; constructor(code: number
 const APPROVAL_TTL_MS = 15 * 60 * 1000;
 
 export class Gateway {
-  private store: Store; private passkeys: PasskeyService; private risk: RiskAnalyzer; private rail: PaymentRail;
-  constructor(deps: { store: Store; passkeys: PasskeyService; risk: RiskAnalyzer; rail: PaymentRail }) {
-    this.store = deps.store; this.passkeys = deps.passkeys; this.risk = deps.risk; this.rail = deps.rail;
+  private store: Store; private passkeys: PasskeyService; private risk: RiskAnalyzer; private rail: PaymentRail; private receipts?: ReceiptService;
+  constructor(deps: { store: Store; passkeys: PasskeyService; risk: RiskAnalyzer; rail: PaymentRail; receipts?: ReceiptService }) {
+    this.store = deps.store; this.receipts = deps.receipts; this.passkeys = deps.passkeys; this.risk = deps.risk; this.rail = deps.rail;
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS agents (agent_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, key_hash TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS wallets (user_id TEXT PRIMARY KEY, vault_id TEXT NOT NULL, payer_email TEXT, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS controls (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);`);
@@ -349,10 +350,11 @@ export class Gateway {
       this.store.audit("payment.aborted", paymentId, { reason, authorization_id: authId, state_updated: moved, ...extra });
     };
     try {
-      let auth;
+      let auth; let snapshot: any = null;
       if (p.paypal_order_id) {
         // Re-read the order: the merchant (or anyone holding its credentials) must not change it after we evaluated it.
-        const now = orderFacts(await this.rail.getOrder!(p.paypal_order_id));
+        snapshot = await this.rail.getOrder!(p.paypal_order_id);
+        const now = orderFacts(snapshot);
         if (now.digest !== p.order_digest) throw new Error(`PayPal order ${p.paypal_order_id} changed after evaluation`);
         auth = await this.rail.authorizeOrder!(p.paypal_order_id, this.vaultFor(sm.mandate.user_id), `ag-${paymentId}`);
       } else {
@@ -378,13 +380,21 @@ export class Gateway {
       const cur = this.store.getPayment(paymentId)!;
       if (cur.status !== "authorized" || cur.paypal_authorization_id !== authId) return abort(["authorized"], `state changed to ${cur.status} before capture`);
 
-      const cap = await this.rail.capture(auth.authorization_id, `ag-${paymentId}-cap`);
+      // Stamp the receipt reference on PayPal's capture record so a dispute on PayPal's side leads back to the receipt.
+      const invoiceId = snapshot && this.receipts ? receiptReference(receiptIdFor(paymentId)) : undefined;
+      const cap = await this.rail.capture(auth.authorization_id, `ag-${paymentId}-cap`,
+        invoiceId ? { invoice_id: invoiceId, note_to_payer: `Agent purchase under your signed mandate. Proof-of-Intent receipt ${invoiceId}` } : undefined);
       if (!this.store.transition(paymentId, ["authorized"], "captured", { paypal_capture_id: cap.capture_id })) {
         // Money moved but local state diverged: record loudly so an operator reconciles. Do not silently drop.
         this.store.audit("payment.capture_state_conflict", paymentId, { capture_id: cap.capture_id, status: this.store.getPayment(paymentId)!.status });
         return;
       }
-      this.store.audit("payment.captured", paymentId, { capture_id: cap.capture_id, status: cap.status });
+      this.store.audit("payment.captured", paymentId, { capture_id: cap.capture_id, status: cap.status, invoice_id: invoiceId ?? null });
+      if (snapshot && this.receipts) {
+        try { this.receipts.issue({ payment_id: paymentId, order_snapshot: snapshot, authorization_id: auth.authorization_id,
+          capture: { capture_id: cap.capture_id, status: cap.status, invoice_id: invoiceId } }); }
+        catch (e) { this.store.audit("receipt.issue_failed", paymentId, { error: (e as Error).message.slice(0, 500) }); }
+      }
       const s = this.store.spendState(pay.mandate_id);
       if (s.tx_count >= sm.mandate.constraints.max_transactions || s.spent_minor >= toMinor(sm.mandate.constraints.max_total)) {
         this.store.setMandateStatus(pay.mandate_id, "exhausted"); this.store.audit("mandate.exhausted", pay.mandate_id, s);

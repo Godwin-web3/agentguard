@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { Store } from "./store.ts";
 import { Signer } from "./keys.ts";
+import { ReceiptService, keyId } from "./receipt.ts";
 import { Gateway, GatewayError } from "./gateway.ts";
 import { PasskeyService } from "./passkeys.ts";
 import { HeuristicRiskAnalyzer, LLMRiskAnalyzer, CompositeRiskAnalyzer, type RiskAnalyzer } from "./risk.ts";
@@ -35,7 +36,10 @@ store.db.exec("CREATE TABLE IF NOT EXISTS wallet_setups (state TEXT PRIMARY KEY,
 const signer = Signer.load();
 const RP_ID = process.env.AGENTGUARD_RP_ID ?? new URL(PUBLIC_URL).hostname;
 const passkeys = new PasskeyService(store, { rpID: RP_ID, rpName: process.env.AGENTGUARD_RP_NAME ?? "AgentGuard", origin: new URL(PUBLIC_URL).origin });
-const gw = new Gateway({ store, passkeys, risk, rail });
+const receipts = new ReceiptService({ store, signer, passkeys, issuer: process.env.AGENTGUARD_ISSUER_NAME ?? new URL(PUBLIC_URL).host });
+const gw = new Gateway({ store, passkeys, risk, rail, receipts });
+// Receipts contain the user's mandate (purpose, limits). Unauthenticated read by receipt id is opt-in, for merchants.
+const PUBLIC_RECEIPTS = process.env.AGENTGUARD_PUBLIC_RECEIPTS === "1";
 
 // Per-agent sliding window on propose. Stops a compromised agent from flooding the gateway.
 const RATE_LIMIT = Number(process.env.AGENTGUARD_AGENT_RATE_LIMIT ?? 30);
@@ -76,7 +80,12 @@ route("GET", "/health", "none", () => {
   const stuck = store.listStuck(new Date(Date.now() - 60_000).toISOString()).length;
   return { ok: stuck === 0 && !lastRecovery?.error, stuck, last_recovery: lastRecovery };
 });
-route("GET", "/.well-known/agentguard-key", "none", () => ({ alg: "Ed25519", use: "audit-attestation", public_key_pem: signer.publicKeyPem() }));
+route("GET", "/.well-known/agentguard-key", "none", () => ({ alg: "Ed25519", use: ["audit-attestation", "proof-of-intent-receipt"],
+  key_id: keyId(signer.publicKeyPem()), public_key_pem: signer.publicKeyPem() }));
+route("GET", "/v1/public/receipts/:id", "none", ({ params }) => {
+  if (!PUBLIC_RECEIPTS) throw new GatewayError(404, "public receipts are disabled (AGENTGUARD_PUBLIC_RECEIPTS=1)");
+  const r = receipts.get(decodeURIComponent(params[0])); if (!r) throw new GatewayError(404, "receipt not found"); return r;
+});
 
 // ---- owner (the human delegating authority) ----
 route("POST", "/v1/agents", "admin", ({ body }) => gw.registerAgent(req(body, "user_id"), req(body, "agent_id")));
@@ -125,6 +134,13 @@ route("GET", "/v1/mandates/:id", "admin", ({ params }) => gw.mandateView(params[
 route("GET", "/v1/approvals", "admin", () => store.pendingApprovals().map(a => ({ ...a, proposal: JSON.parse(a.proposal), evaluation: JSON.parse(a.evaluation) })));
 route("POST", "/v1/approvals/:id", "admin", ({ params, body }) => gw.resolveApproval(params[0], body?.approve === true, body?.approver ?? "owner"));
 route("GET", "/v1/payments", "admin", ({ query }) => store.listPayments(Number(query.get("limit") ?? 200)).map(p => ({ ...p, evaluation: JSON.parse(p.evaluation), proposal: JSON.parse(p.proposal) })));
+route("GET", "/v1/receipts", "admin", ({ query }) => receipts.list(Number(query.get("limit") ?? 100)));
+route("GET", "/v1/receipts/:id", "admin", ({ params }) => {
+  const r = receipts.get(decodeURIComponent(params[0])); if (!r) throw new GatewayError(404, "receipt not found"); return r;
+});
+route("GET", "/v1/payments/:id/receipt", "admin", ({ params }) => {
+  const r = receipts.forPayment(params[0]); if (!r) throw new GatewayError(404, "no receipt for this payment (only captured merchant-order payments get one)"); return r;
+});
 route("GET", "/v1/payments/stuck", "admin", ({ query }) => {
   const older = Number(query.get("older_than_ms") ?? 60_000);
   return store.listStuck(new Date(Date.now() - older).toISOString()).map(p => ({ ...p, evaluation: JSON.parse(p.evaluation), proposal: JSON.parse(p.proposal) }));
@@ -162,6 +178,12 @@ route("GET", "/v1/agent/payments/:id", "agent", ({ params, agent }) => {
   const v = gw.view(params[0]); const row = store.getPayment(params[0]);
   if (!row || row.agent_id !== agent!.agent_id) throw new GatewayError(404, "payment not found");
   return v;
+});
+
+route("GET", "/v1/agent/payments/:id/receipt", "agent", ({ params, agent }) => {
+  const row = store.getPayment(params[0]);
+  if (!row || row.agent_id !== agent!.agent_id) throw new GatewayError(404, "payment not found");
+  const r = receipts.forPayment(params[0]); if (!r) throw new GatewayError(404, "no receipt for this payment"); return r;
 });
 
 async function pkCall<T>(fn: () => Promise<T>): Promise<T> {

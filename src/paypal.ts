@@ -8,7 +8,7 @@ import type { LineItem } from "./types.ts";
  */
 export interface PaymentRail {
   authorize(input: AuthorizeInput): Promise<AuthorizeResult>;
-  capture(authorizationId: string, requestId: string): Promise<{ capture_id: string; status: string }>;
+  capture(authorizationId: string, requestId: string, opts?: CaptureOptions): Promise<{ capture_id: string; status: string }>;
   void(authorizationId: string): Promise<void>;
   /** Current state of an authorization. Used by recovery after process death between authorize and capture. */
   getAuthorization(authorizationId: string): Promise<AuthorizationState>;
@@ -17,6 +17,9 @@ export interface PaymentRail {
   /** Authorize a merchant-created order with the user's vaulted wallet. */
   authorizeOrder?(orderId: string, vaultId: string, requestId: string): Promise<AuthorizeResult>;
 }
+
+/** Optional references PayPal stores on the capture (invoice_id must be unique per merchant account). */
+export interface CaptureOptions { invoice_id?: string; note_to_payer?: string }
 
 export interface AuthorizationState {
   status: string;                 // CREATED | CAPTURED | VOIDED | EXPIRED | DENIED | ...
@@ -115,8 +118,8 @@ export class PayPalClient implements PaymentRail {
       { "PayPal-Request-Id": requestId });
     return observedFrom(order);
   }
-  async capture(authorizationId: string, requestId: string) {
-    const j = await this.call("POST", `/v2/payments/authorizations/${authorizationId}/capture`, { final_capture: true }, { "PayPal-Request-Id": requestId });
+  async capture(authorizationId: string, requestId: string, opts?: CaptureOptions) {
+    const j = await this.call("POST", `/v2/payments/authorizations/${authorizationId}/capture`, { final_capture: true, ...opts }, { "PayPal-Request-Id": requestId });
     return { capture_id: j.id, status: j.status };
   }
   async void(authorizationId: string) { await this.call("POST", `/v2/payments/authorizations/${authorizationId}/void`); }
@@ -147,7 +150,7 @@ function observedFrom(order: any): AuthorizeResult {
 export function lazyPayPalRail(make: () => PayPalClient = () => new PayPalClient()): Required<PaymentRail> {
   let c: PayPalClient | null = null; const pp = () => (c ??= make());
   return {
-    authorize: i => pp().authorize(i), capture: (a, r) => pp().capture(a, r), void: a => pp().void(a),
+    authorize: i => pp().authorize(i), capture: (a, r, o) => pp().capture(a, r, o), void: a => pp().void(a),
     getAuthorization: a => pp().getAuthorization(a), getOrder: id => pp().getOrder(id),
     authorizeOrder: (id, v, r) => pp().authorizeOrder(id, v, r),
   };
