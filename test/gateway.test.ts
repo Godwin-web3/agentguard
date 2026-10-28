@@ -151,8 +151,12 @@ test("API keys authenticate agents", () => {
 });
 
 test("reconcile finishes a payment left in authorized", async () => {
-  const { gw, store, rail, mid } = setup();
-  const r = await gw.propose("shopper", laptop(mid));
+  const { store, rail, gw } = setup();
+  // Mandate with room so the first capture does not exhaust it.
+  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "recovery test",
+    constraints: { currency: "USD", max_total: "5000.00", max_transactions: 10, allowed_categories: ["PHYSICAL_GOODS"] } });
+  gw.confirmMandate(d.mandate.mandate_id, d.mandate_hash);
+  const r = await gw.propose("shopper", laptop(d.mandate.mandate_id));
   // Force it back to authorized as if we crashed after authorize but before capture.
   store.transition(r.payment_id, ["captured"], "authorized");
   store.db.prepare("UPDATE payments SET updated_at=? WHERE payment_id=?").run(new Date(Date.now() - 120_000).toISOString(), r.payment_id);
