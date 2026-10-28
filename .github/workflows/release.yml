@@ -1,0 +1,34 @@
+name: Release
+# Push a tag vX.Y.Z (matching both packages' version) to publish to npm with provenance.
+on:
+  push: { tags: ["v*"] }
+permissions: { contents: read }
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions: { contents: write, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, registry-url: "https://registry.npmjs.org" }
+      - name: Versions match tag
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for p in intent-verifier paypal-toolkit; do
+            pv=$(node -p "require('./packages/$p/package.json').version")
+            [ "$pv" = "$v" ] || { echo "packages/$p is $pv, tag is $v"; exit 1; }
+          done
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:toolkit
+      - name: Publish @agentguard-dev/intent-verifier
+        working-directory: packages/intent-verifier
+        run: npm publish --provenance --access public
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+      - name: Publish @agentguard-dev/paypal-toolkit
+        working-directory: packages/paypal-toolkit
+        run: npm publish --provenance --access public
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+      - name: GitHub release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)." --verify-tag
