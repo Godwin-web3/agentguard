@@ -5,7 +5,7 @@ import { Signer } from "./keys.ts";
 import { Gateway, GatewayError } from "./gateway.ts";
 import { PasskeyService } from "./passkeys.ts";
 import { HeuristicRiskAnalyzer, LLMRiskAnalyzer, CompositeRiskAnalyzer, type RiskAnalyzer } from "./risk.ts";
-import { PayPalClient, type PaymentRail } from "./paypal.ts";
+import { PayPalClient, lazyPayPalRail, type PaymentRail } from "./paypal.ts";
 import { draftFromText, summarize, type LLMConfig } from "./drafter.ts";
 import { readFileSync } from "node:fs";
 import { canonical } from "./canonical.ts";
@@ -17,14 +17,7 @@ if (!ADMIN || ADMIN.length < 24) { console.error("Set AGENTGUARD_ADMIN_TOKEN (>=
 
 let paypal: PayPalClient | null = null;
 const pp = () => (paypal ??= new PayPalClient());
-const rail: PaymentRail = {
-  authorize: i => pp().authorize(i),
-  capture: (a, r) => pp().capture(a, r),
-  void: a => pp().void(a),
-  getAuthorization: a => pp().getAuthorization(a),
-  getOrder: id => pp().getOrder(id),
-  authorizeOrder: (id, v, r) => pp().authorizeOrder(id, v, r),
-};
+const rail: PaymentRail = lazyPayPalRail(pp);
 
 const risk: RiskAnalyzer = process.env.LLM_API_KEY
   ? new CompositeRiskAnalyzer(new HeuristicRiskAnalyzer(), new LLMRiskAnalyzer({ baseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
@@ -142,6 +135,9 @@ route("POST", "/v1/recover", "admin", async ({ body }) => {
   store.audit("recovery.manual", null, { older_than_ms: older, scanned: r.scanned, actions: r.actions });
   return r;
 });
+route("GET", "/v1/control/pause", "admin", () => gw.pauseState());
+route("POST", "/v1/control/pause", "admin", ({ body }) => gw.pause(body?.reason, body?.by));
+route("POST", "/v1/control/resume", "admin", ({ body }) => gw.resume(body?.by));
 route("GET", "/v1/audit", "admin", ({ query }) => store.auditLog(Number(query.get("limit") ?? 200)));
 route("GET", "/v1/audit/verify", "admin", () => store.verifyAuditChain());
 // Signed checkpoint of the audit chain head: publish or archive these to detect any later rewrite of history.

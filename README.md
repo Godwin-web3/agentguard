@@ -117,3 +117,11 @@ Live proof: `scripts/sandbox-orders.sh` (merchant side: `scripts/merchant-order.
 
 Production limit: reading and authorizing another merchant's order needs the order to be created by the same PayPal app,
 or PayPal partner permissions (`PayPal-Auth-Assertion`). Single-purchase-unit orders only.
+
+## Operator kill-switch
+
+`POST /v1/control/pause {"reason","by"}` (admin) blocks every new payment proposal (503) and every approval, and stops any
+reserved payment from reaching PayPal. `POST /v1/control/resume` lifts it; `GET /v1/control/pause` shows state. Both are
+written to the audit chain. Pausing is fail-safe, so it is deliberately admin-only (no passkey needed to stop money).
+
+Type check: `npm run typecheck`.
