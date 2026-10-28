@@ -37,12 +37,12 @@ html=f'''<!doctype html>
 <body>
 <!--#include nav-->
 <main id="main">
-<section class="section" style="padding-top:56px"><div class="container stack gap-4" style="max-width:780px;margin-left:max(24px,calc((100% - var(--container))/2))">
+<section class="section" style="padding-top:56px"><div class="container"><div class="stack gap-4" style="max-width:780px">
   <span class="eyebrow">Brand</span>
   <h1 class="display">Bounds, held.</h1>
   <p class="lede">AgentGuard proves that an agent payment stayed inside limits a person signed. The identity says the same thing: two opposing brackets, the bounds of a mandate, hold a solid core, the payment. Quiet, exact, and checkable.</p>
-  <div class="row gap-2"><a class="btn btn-primary" href="/brand/agentguard-brand.zip" download>Download kit (ZIP)</a><a class="btn btn-secondary" href="/brand/tokens.json">tokens.json</a><a class="btn btn-ghost" href="/brand/tokens.css">tokens.css</a></div>
-</div></section>
+  <div class="row gap-2 wrap"><a class="btn btn-primary" href="/brand/agentguard-brand.zip" download>Download kit (ZIP)</a><a class="btn btn-secondary" href="/brand/tokens.json">tokens.json</a><a class="btn btn-ghost" href="/brand/tokens.css">tokens.css</a></div>
+</div></div></section>
 
 <section class="section bt" id="logo"><div class="container stack gap-8">
   <div class="section-hd"><span class="eyebrow">01 · Logo</span><h2 class="h2">The mark</h2><p class="muted">A 32-unit grid on a 4-unit module. The brackets are 4 units thick; the core is 12 × 12, centred, a 4-unit gap from each bracket, all inside a 2-unit inset. Built from rectangles only, so it stays sharp at 16 px.</p></div>
@@ -66,7 +66,7 @@ html=f'''<!doctype html>
 
 <section class="section bt" id="type"><div class="container stack gap-8">
   <div class="section-hd"><span class="eyebrow">03 · Type</span><h2 class="h2">Inter and JetBrains Mono</h2><p class="muted">Inter for interface and prose, tight tracking at display sizes. JetBrains Mono for anything a machine checks: IDs, hashes, amounts in receipts, verdicts. Both self-hosted (SIL OFL), no third-party font requests.</p></div>
-  <div class="card"><div class="card-bd stack gap-4">{"".join(f'<div class="type-row"><span class="mono xs muted">{k} · {l}</span><span style="font-size:var(--text-{k});line-height:var(--leading-{k});{"letter-spacing:var(--tracking-tighter);font-weight:620" if k in ("6xl","4xl","2xl") else ""}">{"Bounds, held." if k=="6xl" else "Verifiable intent for agent payments"}</span></div>' for k,l in types)}
+  <div class="card specimen"><div class="card-bd">{"".join(f'<div class="type-row"><span class="mono xs muted">{k} · {l}</span><span style="font-size:var(--text-{k});line-height:var(--leading-{k});{"letter-spacing:var(--tracking-tighter);font-weight:620" if k in ("6xl","4xl","2xl") else ""}">{"Bounds, held." if k=="6xl" else "Verifiable intent for agent payments"}</span></div>' for k,l in types)}
     <div class="type-row"><span class="mono xs muted">mono · Evidence</span><span class="mono">poi_2b2b34d8c4bfa2e098cadba6 · 10.80 USD · <b style="color:var(--success)">VALID</b></span></div></div></div>
   <div class="cols-3">
     <div class="card"><div class="card-bd stack gap-2"><h3 class="h3">Radius</h3><div class="row gap-3">{"".join(f'<div class="rad" style="border-radius:var(--radius-{r})"><span class="mono xs">{r}</span></div>' for r in ("xs","sm","md","lg","xl"))}</div></div></div>

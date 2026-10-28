@@ -283,6 +283,12 @@ async function handler(rq: IncomingMessage, res: ServerResponse): Promise<unknow
     const f = siteFile(url.pathname);
     if (f) { res.writeHead(200, f.headers); return res.end(rq.method === "HEAD" ? undefined : f.body); }
   }
+  if ((rq.method === "GET" || rq.method === "HEAD") && url.pathname === "/healthz") {
+    // Liveness plus a database round-trip; reports no configuration or secrets.
+    const t0 = Date.now();
+    const db = await Promise.race([sql.prepare("SELECT 1 AS ok").get().then(() => "ok", () => "error"), new Promise<string>(r => setTimeout(r, 3000, "timeout"))]);
+    return send(res, db === "ok" ? 200 : 503, { ok: db === "ok", db, db_ms: Date.now() - t0 });
+  }
   const r = routes.find(r => r.method === rq.method && r.re.test(url.pathname));
   if (!r) return send(res, 404, { error: "not found" });
   try {

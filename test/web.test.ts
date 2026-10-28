@@ -44,3 +44,30 @@ test("static site: pretty paths, strict CSP, no traversal, no inline scripts", a
   assert.equal(siteFile("/site.webmanifest")!.headers["content-type"], "application/manifest+json");
   for (const p of ["/../package.json", "/%2e%2e/package.json", "/..%2fsrc/app.ts", "/nope.html", "/v1/whatever"]) assert.equal(siteFile(p), null, p);
 });
+
+test("static site: content-hashed assets are immutable, HTML is no-cache", async () => {
+  const { siteFile } = await import("../src/site.ts");
+  const html = siteFile("/receipt")!;
+  assert.equal(html.headers["cache-control"], "no-cache");
+  const refs = [...html.body.toString().matchAll(/\/assets\/[\w-]+\.[0-9a-f]{10}\.(?:js|css)/g)].map(m => m[0]);
+  assert.ok(refs.length >= 3, "pages reference hashed assets");
+  for (const r of refs) assert.equal(siteFile(r)!.headers["cache-control"], "public, max-age=31536000, immutable", r);
+  assert.doesNotMatch(html.body.toString(), /\/assets\/[\w-]+\.(?:js|css)"/, "no unhashed asset references");
+  assert.equal(siteFile("/assets/receipt.js"), null);
+});
+
+test("/healthz reports liveness and a database round-trip without configuration", async () => {
+  process.env.AGENTGUARD_ADMIN_TOKEN ??= "x".repeat(32);
+  const { openSql } = await import("../src/db.ts");
+  const { createApp } = await import("../src/app.ts");
+  const app = await createApp({ sql: await openSql({ path: join(mkdtempSync(join(tmpdir(), "ag-hz-")), "t.db") }), background: false });
+  const http = await import("node:http");
+  const srv = http.createServer((q, r) => void app.handler(q, r)).listen(0);
+  try {
+    const port = (srv.address() as import("node:net").AddressInfo).port;
+    const r = await fetch(`http://127.0.0.1:${port}/healthz`);
+    assert.equal(r.status, 200); assert.equal(r.headers.get("cache-control"), "no-store");
+    const b = await r.json() as any;
+    assert.deepEqual(Object.keys(b).sort(), ["db", "db_ms", "ok"]); assert.equal(b.ok, true); assert.equal(b.db, "ok");
+  } finally { srv.close(); await app.close(); }
+});

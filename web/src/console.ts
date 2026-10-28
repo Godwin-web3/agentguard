@@ -140,7 +140,9 @@ function renderApprovals(list: any[]) {
   if (!list.length) { el.innerHTML = `<div class="empty">${icon("i-circle-check")}<b>Nothing waiting on you</b><p>Payments above a mandate's ask-me threshold appear here for a passkey decision.</p></div>`; return; }
   el.innerHTML = list.map(a => {
     const p = a.proposal, e = a.evaluation;
-    const reasons = (e.reasons || []).map((r: string) => `<li>${icon("i-circle-alert")}<span>${esc(r)}</span></li>`).join("");
+    // The gateway folds escalating risk signals into reasons as "signal: detail"; show each once, as a risk line.
+    const riskLines = new Set((e.risk || []).map((r: any) => `${r.signal}: ${r.detail}`));
+    const reasons = [...new Set<string>(e.reasons || [])].filter(r => !riskLines.has(r)).map((r: string) => `<li>${icon("i-circle-alert")}<span>${esc(r)}</span></li>`).join("");
     const risk = (e.risk || []).map((r: any) => `<li class="${r.severity === "high" ? "high" : ""}">${icon("i-triangle-alert")}<span>${esc(r.signal)}: ${esc(r.detail)}</span></li>`).join("");
     return `<article class="approval" aria-label="Held payment ${esc(money(e.amount_minor, p.currency))}">
       <div class="row gap-3"><div class="amount" style="font-size:22px">${money(e.amount_minor, p.currency)}</div>${badge("needs_human")}</div>
@@ -157,7 +159,7 @@ function renderApprovals(list: any[]) {
     b.setAttribute("aria-busy", "true");
     try { if (await signedDecision(b.dataset.ap!, b.dataset.v === "1")) toast(b.dataset.v === "1" ? "Approved with your passkey. Capturing." : "Denied with your passkey. Authorization voided.", "success"); }
     catch (e) { fail(e); }
-    b.removeAttribute("aria-busy"); refresh();
+    b.removeAttribute("aria-busy"); void refresh();
   });
 }
 
@@ -177,7 +179,7 @@ $("#gMandates").addEventListener("click", async ev => {
     if (b.dataset.act === "revoke") { if (confirm("Revoke this mandate with your passkey? Pending authorizations are voided.") && await signedRevoke(id)) toast("Mandate revoked.", "success"); }
     if (b.dataset.act === "discard") { await api(`/v1/mandates/${id}/revoke`, { method: "POST", body: JSON.stringify({ reason: "discarded" }) }); toast("Draft discarded."); }
   } catch (e) { fail(e); }
-  b.removeAttribute("aria-busy"); refresh();
+  b.removeAttribute("aria-busy"); void refresh();
 });
 
 let loaded = false;
@@ -259,11 +261,11 @@ async function enter() {
   sessionStorage.setItem("ag_token", TOKEN);
   $("#connectView").hidden = true; $("#appView").hidden = false; route();
   try { await refresh(); } catch (e) { if (!loaded && /unauthor|forbidden|token/i.test(String((e as Error).message))) { $("#appView").hidden = true; $("#connectView").hidden = false; throw e; } }
-  verifyChain(); passkeyRefresh();
+  void verifyChain(); void passkeyRefresh();
 }
 $("#disconnect").onclick = () => { sessionStorage.removeItem("ag_token"); TOKEN = ""; location.hash = ""; location.reload(); };
 $("#user").addEventListener("change", passkeyRefresh);
-$("#pkCreate").onclick = async () => { try { if (await enrollWith((await issueLink()).token)) toast("Passkey enrolled.", "success"); } catch (e) { fail(e); } passkeyRefresh(); };
+$("#pkCreate").onclick = async () => { try { if (await enrollWith((await issueLink()).token)) toast("Passkey enrolled.", "success"); } catch (e) { fail(e); } void passkeyRefresh(); };
 $("#pkLink").onclick = async () => {
   try { const t = await issueLink();
     $("#enrollMeta").textContent = `For ${t.user_id} · expires ${new Date(t.expires_at).toLocaleTimeString()}${t.replaces ? " · REPLACES the current passkey (logged)" : ""}`;
@@ -301,7 +303,7 @@ $("#draftForm").addEventListener("submit", async ev => {
 // Opening an enrollment link (#enroll=<token>) redeems it; no admin token needed.
 if (location.hash.startsWith("#enroll=")) {
   const t = decodeURIComponent(location.hash.slice(8)); history.replaceState(null, "", location.pathname);
-  setTimeout(async () => { try { if (await enrollWith(t)) toast("Passkey enrolled. You can close this tab.", "success"); } catch (e) { fail(e); } passkeyRefresh(); }, 0);
+  setTimeout(async () => { try { if (await enrollWith(t)) toast("Passkey enrolled. You can close this tab.", "success"); } catch (e) { fail(e); } void passkeyRefresh(); }, 0);
 }
 pkObserver();
 if (TOKEN) enter().catch(() => {});

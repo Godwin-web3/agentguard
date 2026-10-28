@@ -45,9 +45,9 @@ $("tamper").addEventListener("click", () => {
   let env: any; try { env = JSON.parse(ta.value); } catch { return fail("load a receipt first"); }
   const p = env?.receipt?.payment;
   if (p && Number.isInteger(p.amount_minor)) p.amount_minor += 1; else if (env?.receipt) env.receipt.receipt_id = String(env.receipt.receipt_id) + "x"; else return fail("load a receipt first");
-  ta.value = JSON.stringify(env, null, 2); run("The receipt was modified after signing.");
+  ta.value = JSON.stringify(env, null, 2); void run("The receipt was modified after signing.");
 });
-$<HTMLInputElement>("rfile").addEventListener("change", async e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) { ta.value = await f.text(); run(); } });
+$<HTMLInputElement>("rfile").addEventListener("change", async e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) { ta.value = await f.text(); void run(); } });
 ta.addEventListener("dragover", e => e.preventDefault());
-ta.addEventListener("drop", async e => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) { ta.value = await f.text(); run(); } });
+ta.addEventListener("drop", async e => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) { ta.value = await f.text(); void run(); } });
 if (new URLSearchParams(location.search).get("sample") === "sandbox") sample().catch(e => fail(e.message));

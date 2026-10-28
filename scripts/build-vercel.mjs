@@ -24,8 +24,9 @@ writeFileSync(`${out}/config.json`, JSON.stringify({
   overrides,
   routes: [
     { src: "/(|console|receipt|brand)", headers: { ...sec, "content-security-policy": SITE_CSP, "x-frame-options": "DENY", "cache-control": "public, max-age=0, must-revalidate" }, continue: true },
+    { src: "/assets/[\\w-]+\\.[0-9a-f]{10}\\.(js|css)", headers: { ...sec, "cache-control": "public, max-age=31536000, immutable" }, continue: true },
     { src: "/brand/fonts/(.*)", headers: { ...sec, "cache-control": "public, max-age=31536000, immutable" }, continue: true },
-    { src: "/(assets|brand|samples)/(.*)", headers: { ...sec, "cache-control": "public, max-age=3600" }, continue: true },
+    { src: "/(brand|samples)/(.*)", headers: { ...sec, "cache-control": "public, max-age=3600" }, continue: true },
     { handle: "filesystem" },
     { src: "/(.*)", dest: "/api" },
   ],

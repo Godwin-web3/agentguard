@@ -30,7 +30,7 @@ export function siteFile(pathname: string): { headers: Record<string, string>; b
   if (!existsSync(abs)) return null;
   const ext = extname(rel), html = ext === ".html";
   const out = { body: readFileSync(abs), headers: { "content-type": TYPES[ext], "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin",
-    "cache-control": html ? "no-cache" : rel.startsWith("brand/fonts/") ? "public, max-age=31536000, immutable" : "public, max-age=3600",
+    "cache-control": html ? "no-cache" : /^assets\/[\w-]+\.[0-9a-f]{10}\.(js|css)$/.test(rel) || rel.startsWith("brand/fonts/") ? "public, max-age=31536000, immutable" : "public, max-age=3600",
     ...(html ? { "content-security-policy": SITE_CSP, "x-frame-options": "DENY" } : {}) } };
   cache.set(abs, out); return out;
 }

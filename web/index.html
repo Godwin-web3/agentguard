@@ -11,49 +11,39 @@
 <!--#include nav-->
 <main id="main">
 <section class="hero">
-  <div class="gridlines" aria-hidden="true"></div>
   <div class="container hero-inner">
-    <div class="stack gap-6">
-      <a class="badge badge-accent" href="#ap2" style="width:max-content"><svg class="i i-sm"><use href="/brand/icons.svg#g-bounds"/></svg>AP2-compatible receipts, verified on the PayPal sandbox</a>
-      <h1 class="display">Verifiable intent for agent payments. <span class="tone">Enforced on PayPal, today.</span></h1>
-      <p class="lede">Your user signs what their agent may buy, with a passkey. AgentGuard holds every payment to those bounds before PayPal moves money, then issues a signed, timestamped receipt that anyone can check.</p>
+    <div class="hero-copy">
+      <a class="kicker" href="#ap2"><span class="mono">AP2</span>Verifiable intent, enforced on PayPal today<svg class="i i-sm"><use href="/brand/icons.svg#i-arrow-right"/></svg></a>
+      <h1 class="display">Agent payments, held to what your user signed.</h1>
+      <p class="lede">Your user sets the bounds once, with a passkey. AgentGuard checks every payment an agent proposes against them before PayPal moves money, and issues a receipt that holds up in a dispute.</p>
       <div class="row gap-3 wrap">
         <a class="btn btn-primary btn-lg" href="#quickstart">Get started<svg class="i"><use href="/brand/icons.svg#i-arrow-right"/></svg></a>
         <a class="btn btn-secondary btn-lg" href="/receipt?sample=sandbox"><svg class="i"><use href="/brand/icons.svg#g-receipt"/></svg>Verify a real receipt</a>
       </div>
-      <div class="standards" aria-label="Standards used">
-        <span>WebAuthn passkeys</span><span>Ed25519</span><span>RFC 3161</span><span>Merkle anchoring</span><span>PayPal Orders v2</span>
-      </div>
+      <p class="standards" aria-label="Standards used">WebAuthn <i>/</i> Ed25519 <i>/</i> RFC 3161 timestamps <i>/</i> PayPal Orders v2</p>
     </div>
 
-    <div class="mock" aria-label="Product preview: an approval in the console and the resulting receipt">
-      <div class="card mock-approval">
-        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-inbox"/></svg><h3>Approval needed</h3><span class="badge badge-warning" style="margin-left:auto"><span class="dot"></span>held</span></div>
-        <div class="card-bd stack gap-3">
-          <div class="row gap-3"><div class="amount">$10.80</div><span class="subtle small">USD to sandbox merchant</span></div>
-          <div class="small muted">1 × API credits <code class="inline">AG-CREDITS-10</code></div>
-          <ul class="reasons" style="margin:0">
-            <li><svg class="i"><use href="/brand/icons.svg#i-circle-alert"/></svg>Above your $5.00 ask-me threshold</li>
-            <li><svg class="i"><use href="/brand/icons.svg#i-circle-check"/></svg>Payee, SKU and $25.00 budget all inside the mandate</li>
-          </ul>
-          <div class="row gap-2 wrap">
-            <span class="btn btn-success btn-sm" aria-hidden="true"><svg class="i"><use href="/brand/icons.svg#i-fingerprint"/></svg>Approve with passkey</span>
-            <span class="btn btn-danger btn-sm" aria-hidden="true">Deny</span>
-            <span class="pk" style="margin-left:auto"><svg class="i i-sm"><use href="/brand/icons.svg#g-passkey"/></svg>passkey registered</span>
-          </div>
-        </div>
+    <figure class="flow card" aria-label="Product preview: one agent payment, from signed mandate to verified receipt">
+      <div class="flow-hd">
+        <svg class="i"><use href="/brand/icons.svg#g-mandate"/></svg>
+        <div class="stack"><b>Mandate signed by passkey</b><span class="mono xs subtle">mdt_f1a6…cedf · ES256 · expires in 2h</span></div>
       </div>
-      <div class="card mock-receipt">
-        <div class="verdict ok" style="padding:14px 16px 10px"><div class="mark"><svg class="i i-lg"><use href="/brand/icons.svg#i-check"/></svg></div>
-          <div class="stack"><span class="word">VALID</span><span class="xs subtle">Receipt poi_2b2b…dba6 · sandbox</span></div></div>
-        <div>
-          <div class="check-row"><svg class="i ok"><use href="/brand/icons.svg#i-check"/></svg><span class="what">User passkey signed the mandate</span><span class="detail">ES256</span></div>
-          <div class="check-row"><svg class="i ok"><use href="/brand/icons.svg#i-check"/></svg><span class="what">Issuer signature</span><span class="detail">Ed25519</span></div>
-          <div class="check-row"><svg class="i ok"><use href="/brand/icons.svg#i-check"/></svg><span class="what">Independent timestamps</span><span class="detail">freetsa · sectigo</span></div>
-          <div class="check-row"><svg class="i ok"><use href="/brand/icons.svg#i-check"/></svg><span class="what">Audit log anchor</span><span class="detail">root dc20…7d57</span></div>
-        </div>
+      <div class="bounds" role="img" aria-label="Budget: 10.80 of 25.00 USD used; payments above 5.00 USD need approval">
+        <div class="bounds-lbl"><span>Budget</span><span class="mono"><b>$10.80</b> / $25.00</span></div>
+        <div class="meter"><span class="fill" style="width:43.2%"></span><span class="tick" style="left:20%"><em>ask me &gt; $5</em></span></div>
+        <div class="bounds-chips"><span>payee M32J…ASQ</span><span>SKU AG-CREDITS-10</span><span>1 of 2 payments</span></div>
       </div>
-    </div>
+      <ol class="steps">
+        <li class="held"><span class="t">+0.0s</span><span class="what">Agent proposes <b>$10.80</b>, over your $5 ask-me line</span><span class="tag warn">held</span></li>
+        <li><span class="t">+1.9s</span><span class="what">You approve with your passkey</span><svg class="i i-sm"><use href="/brand/icons.svg#g-passkey"/></svg></li>
+        <li><span class="t">+6.3s</span><span class="what">Captured on PayPal · <span class="mono">3XR9…751R</span></span></li>
+      </ol>
+      <a class="flow-ft" href="/receipt?sample=sandbox">
+        <span class="valid"><svg class="i i-sm"><use href="/brand/icons.svg#i-check"/></svg>VALID</span>
+        <span class="mono xs subtle">poi_2b2b…dba6 · 2 timestamps · anchored</span>
+        <span class="go">Verify<svg class="i i-sm"><use href="/brand/icons.svg#i-arrow-right"/></svg></span>
+      </a>
+    </figure>
   </div>
 </section>
 

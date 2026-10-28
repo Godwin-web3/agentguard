@@ -13,7 +13,7 @@
     "typecheck": "tsc -p tsconfig.all.json && tsc -p tsconfig.web.json",
     "test:toolkit": "cd packages/paypal-toolkit && npm ci && npm run build && npm test",
     "build:vercel": "node scripts/build-vercel.mjs",
-    "lint": "eslint src test scripts api",
+    "lint": "eslint src test scripts api web/src",
     "test:pg": "AGENTGUARD_TEST_PG=${AGENTGUARD_TEST_PG:-postgres://postgres@127.0.0.1:55432/postgres} node --experimental-strip-types --no-warnings --test test/*.test.ts",
     "build:web": "node scripts/build-web.mjs"
   },
