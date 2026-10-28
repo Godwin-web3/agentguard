@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, randomBytes } from "node:crypto";
 import { Store } from "./store.ts";
 import { Signer } from "./keys.ts";
 import { Gateway, GatewayError } from "./gateway.ts";
@@ -32,6 +32,8 @@ const llm: LLMConfig | undefined = process.env.LLM_API_KEY
 const CONSOLE_HTML = readFileSync(new URL("./console.html", import.meta.url), "utf8");
 
 const store = new Store();
+const WALLET_SETUP_TTL_MS = 30 * 60 * 1000;
+store.db.exec("CREATE TABLE IF NOT EXISTS wallet_setups (state TEXT PRIMARY KEY, user_id TEXT NOT NULL, setup_token_id TEXT NOT NULL, expires_at TEXT NOT NULL)");
 const signer = Signer.load();
 const gw = new Gateway({ store, signer, risk, rail });
 
@@ -80,12 +82,22 @@ route("GET", "/.well-known/agentguard-key", "none", () => ({ alg: "Ed25519", pub
 route("POST", "/v1/agents", "admin", ({ body }) => gw.registerAgent(req(body, "user_id"), req(body, "agent_id")));
 route("POST", "/v1/wallets/setup", "admin", async ({ body }) => {
   const user = req(body, "user_id");
-  return pp().createSetupToken(`${PUBLIC_URL}/v1/wallets/return?user_id=${encodeURIComponent(user)}`, `${PUBLIC_URL}/v1/wallets/cancel`);
+  // Bind the user to an unguessable one-time state value server-side; the return URL carries only that state.
+  const state = randomBytes(24).toString("base64url");
+  const t = await pp().createSetupToken(`${PUBLIC_URL}/v1/wallets/return?state=${state}`, `${PUBLIC_URL}/v1/wallets/cancel`);
+  store.db.prepare("INSERT INTO wallet_setups (state, user_id, setup_token_id, expires_at) VALUES (?,?,?,?)")
+    .run(state, user, t.id, new Date(Date.now() + WALLET_SETUP_TTL_MS).toISOString());
+  return t;
 });
 // PayPal redirects the buyer here after consent; the setup token id arrives as approval_token_id.
 route("GET", "/v1/wallets/return", "none", async ({ query }) => {
-  const user = query.get("user_id"); const tok = query.get("approval_token_id");
-  if (!user || !tok) throw new GatewayError(400, "missing user_id or approval_token_id");
+  const state = query.get("state"); const tok = query.get("approval_token_id");
+  if (!state || !tok) throw new GatewayError(400, "missing state or approval_token_id");
+  // Single-use: consume the state atomically. user_id comes from our record, never from the query string,
+  // and the approval token must be the setup token we created for that user.
+  const row = store.db.prepare("DELETE FROM wallet_setups WHERE state=? RETURNING user_id, setup_token_id, expires_at").get(state) as any;
+  if (!row || row.setup_token_id !== tok || new Date() > new Date(row.expires_at)) throw new GatewayError(403, "invalid or expired wallet setup state");
+  const user = row.user_id as string;
   const t = await pp().createPaymentToken(tok);
   gw.linkWallet(user, t.vault_id, t.payer_email);
   return { linked: true, user_id: user, payer_email: t.payer_email ?? null };

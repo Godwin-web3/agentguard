@@ -4,7 +4,7 @@ import { evaluatePolicy, proposalHash } from "./policy.ts";
 import type { Signer } from "./keys.ts";
 import type { RiskAnalyzer } from "./risk.ts";
 import type { PaymentRail } from "./paypal.ts";
-import type { Store, PaymentRow } from "./store.ts";
+import type { Store, PaymentRow, PaymentStatus } from "./store.ts";
 import type { Decision, Evaluation, Mandate, MandateConstraints, PaymentProposal } from "./types.ts";
 
 export interface ProposeResult {
@@ -247,32 +247,47 @@ export class Gateway {
   /** The only code path that touches money. Authorize -> verify PayPal's view matches -> capture, else void. */
   private async execute(paymentId: string): Promise<void> {
     const pay = this.store.getPayment(paymentId)!;
+    if (pay.status !== "reserved") { this.store.audit("payment.execute_skipped", paymentId, { status: pay.status }); return; }
     const p: PaymentProposal = JSON.parse(pay.proposal);
     const sm = this.store.getMandate(pay.mandate_id)!;
+    let authId: string | null = null;
+    // Void an open authorization and mark the payment voided (only if it is still in one of `from`).
+    const abort = async (from: PaymentStatus[], reason: string, extra: Record<string, unknown> = {}) => {
+      if (authId) {
+        try { await this.rail.void(authId); }
+        catch (e) { this.store.audit("payment.void_failed", paymentId, { authorization_id: authId, error: (e as Error).message.slice(0, 500) }); }
+      }
+      const moved = from.length > 0 && this.store.transition(paymentId, from, authId ? "voided" : "failed", { error: reason.slice(0, 500) });
+      this.store.audit("payment.aborted", paymentId, { reason, authorization_id: authId, state_updated: moved, ...extra });
+    };
     try {
       const auth = await this.rail.authorize({ requestId: `ag-${paymentId}`, referenceId: paymentId, vaultId: this.vaultFor(sm.mandate.user_id),
         currency: p.currency, amountMinor: pay.amount_minor, items: p.items, payee: p.payee, description: sm.mandate.purpose });
-      this.store.transition(paymentId, ["reserved"], "authorized", { paypal_order_id: auth.order_id, paypal_authorization_id: auth.authorization_id });
+      authId = auth.authorization_id;
+      // CAS reserved -> authorized. If this fails (e.g. recovery already marked it failed and released the
+      // budget hold), we must never capture: void the authorization and stop.
+      if (!this.store.transition(paymentId, ["reserved"], "authorized", { paypal_order_id: auth.order_id, paypal_authorization_id: auth.authorization_id })) {
+        const cur = this.store.getPayment(paymentId)!;
+        return abort([], `state changed to ${cur.status} during authorize`, { observed_status: cur.status });
+      }
       this.store.audit("payment.authorized", paymentId, { order_id: auth.order_id, authorization_id: auth.authorization_id, observed: auth.observed });
 
-      const mismatch: string[] = [];
-      if (auth.observed.currency !== p.currency) mismatch.push(`currency ${auth.observed.currency}`);
-      if (auth.observed.amountMinor !== pay.amount_minor) mismatch.push(`amount ${auth.observed.amountMinor} != ${pay.amount_minor}`);
-      const want = (p.payee.merchant_id ?? p.payee.email_address ?? "").toLowerCase();
-      const got = [auth.observed.payee.merchant_id, auth.observed.payee.email_address].filter(Boolean).map(s => s!.toLowerCase());
-      if (want && got.length && !got.includes(want)) mismatch.push(`payee ${got.join("/")} != ${want}`);
-      if (mismatch.length) {
-        await this.rail.void(auth.authorization_id);
-        this.store.transition(paymentId, ["authorized"], "voided", { error: `PayPal order mismatch: ${mismatch.join("; ")}` });
-        this.store.audit("payment.voided_mismatch", paymentId, { mismatch });
-        return;
-      }
+      const mismatch = verifyObserved(p, pay.amount_minor, auth.observed);
+      if (mismatch.length) return abort(["authorized"], `PayPal order mismatch: ${mismatch.join("; ")}`, { mismatch });
+
       // Revocation can land between authorize and capture: re-check before moving money.
       const now = this.store.getMandate(pay.mandate_id)!;
-      if (now.status !== "active") { await this.rail.void(auth.authorization_id); this.store.transition(paymentId, ["authorized"], "voided", { error: "mandate revoked before capture" }); return; }
+      if (now.status !== "active") return abort(["authorized"], "mandate revoked before capture");
+      // Final guard: the row must still be ours, in authorized, holding budget.
+      const cur = this.store.getPayment(paymentId)!;
+      if (cur.status !== "authorized" || cur.paypal_authorization_id !== authId) return abort(["authorized"], `state changed to ${cur.status} before capture`);
 
       const cap = await this.rail.capture(auth.authorization_id, `ag-${paymentId}-cap`);
-      this.store.transition(paymentId, ["authorized"], "captured", { paypal_capture_id: cap.capture_id });
+      if (!this.store.transition(paymentId, ["authorized"], "captured", { paypal_capture_id: cap.capture_id })) {
+        // Money moved but local state diverged: record loudly so an operator reconciles. Do not silently drop.
+        this.store.audit("payment.capture_state_conflict", paymentId, { capture_id: cap.capture_id, status: this.store.getPayment(paymentId)!.status });
+        return;
+      }
       this.store.audit("payment.captured", paymentId, { capture_id: cap.capture_id, status: cap.status });
       const s = this.store.spendState(pay.mandate_id);
       if (s.tx_count >= sm.mandate.constraints.max_transactions || s.spent_minor >= toMinor(sm.mandate.constraints.max_total)) {
@@ -280,6 +295,7 @@ export class Gateway {
       }
     } catch (e) {
       const msg = (e as Error).message;
+      if (authId) return abort(["reserved", "authorized"], `execute error: ${msg}`);
       this.store.transition(paymentId, ["reserved", "authorized"], "failed", { error: msg.slice(0, 500) });
       this.store.audit("payment.failed", paymentId, { error: msg.slice(0, 500) });
     }
@@ -304,4 +320,23 @@ function validateProposal(p: PaymentProposal) {
   if (!Array.isArray(p.items) || !p.items.length || p.items.length > 50) throw new GatewayError(400, "items must be 1..50");
   for (const i of p.items) if (!["PHYSICAL_GOODS", "DIGITAL_GOODS", "DONATION"].includes(i.category)) throw new GatewayError(400, `invalid category for ${i.name}`);
   if (!p.payee || typeof p.payee !== "object") throw new GatewayError(400, "payee is required");
+}
+
+/** Fail closed: PayPal must report the exact payee we sent (merchant_id if proposed, else email) and no conflicting id. */
+export function verifyObserved(p: PaymentProposal, amountMinor: number,
+  o: { currency: string; amountMinor: number; payee: { merchant_id?: string; email_address?: string } }): string[] {
+  const out: string[] = [];
+  if (o.currency !== p.currency) out.push(`currency ${o.currency}`);
+  if (o.amountMinor !== amountMinor) out.push(`amount ${o.amountMinor} != ${amountMinor}`);
+  const norm = (s?: string) => (s ?? "").trim().toLowerCase();
+  const wantM = norm(p.payee.merchant_id), wantE = norm(p.payee.email_address);
+  const gotM = norm(o.payee?.merchant_id), gotE = norm(o.payee?.email_address);
+  if (!gotM && !gotE) out.push("PayPal reported no payee");
+  else if (wantM) {
+    if (gotM !== wantM) out.push(`payee merchant_id ${gotM || "(none)"} != ${wantM}`);
+    if (wantE && gotE && gotE !== wantE) out.push(`payee email ${gotE} != ${wantE}`);
+  } else if (wantE) {
+    if (gotE !== wantE) out.push(`payee email ${gotE || "(none)"} != ${wantE}`);
+  } else out.push("proposal has no payee identifier");
+  return out;
 }
