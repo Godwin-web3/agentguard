@@ -1,0 +1,85 @@
+{
+  "name": "@agentguard/paypal-toolkit",
+  "version": "0.1.0",
+  "description": "Drop-in guard for PayPal's Agent Toolkit: agents can only move money through AgentGuard, under a passkey-signed mandate checked against PayPal's own order.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Godwin-web3/agentguard.git",
+    "directory": "packages/paypal-toolkit"
+  },
+  "keywords": [
+    "paypal",
+    "agent-toolkit",
+    "mcp",
+    "ai-sdk",
+    "openai",
+    "agents",
+    "payments",
+    "guardrails",
+    "passkey"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./ai-sdk": {
+      "types": "./dist/ai-sdk.d.ts",
+      "default": "./dist/ai-sdk.js"
+    },
+    "./openai": {
+      "types": "./dist/openai.d.ts",
+      "default": "./dist/openai.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
+    }
+  },
+  "bin": {
+    "agentguard-paypal-mcp": "dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/bin.js",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "@paypal/agent-toolkit": "^1.11.0",
+    "ai": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@paypal/agent-toolkit": "^1.11.0",
+    "@types/node": "^22.20.5",
+    "ai": "^4.3.19",
+    "typescript": "^5.9.3"
+  }
+}
