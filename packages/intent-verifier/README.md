@@ -1,4 +1,4 @@
-# @agentguard/intent-verifier
+# @agentguard-dev/intent-verifier
 
 Standalone, zero-dependency verifier for AgentGuard **Proof-of-Intent receipts** (`agentguard.proof-of-intent/v1`). It does not talk to, import, or trust an AgentGuard server. Node ≥ 20.
 
@@ -16,6 +16,6 @@ Exit code 0 = valid, 1 = invalid, 2 = usage error. `--json` prints the full resu
 
 ## Library
 ```ts
-import { verifyReceipt, buildDisputeEvidence } from "@agentguard/intent-verifier";
+import { verifyReceipt, buildDisputeEvidence } from "@agentguard-dev/intent-verifier";
 const r = await verifyReceipt(envelope, { issuerPublicKeyPem, expectedPayee: "you@shop.example" });
 ```

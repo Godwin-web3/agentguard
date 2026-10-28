@@ -86,7 +86,7 @@
         <p class="lede">The receipt bundles the user's passkey signature, the order PayPal reported, the approval and the capture. The issuer signs it, two independent timestamp authorities stamp it, and the audit log is anchored.</p>
       </div>
       <ul class="checklist">
-        <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Verifies offline with the open-source <code class="inline">intent-verifier</code>, or in your browser.</span></li>
+        <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Verifies offline with the open-source <code class="inline">@agentguard-dev/intent-verifier</code>, or in your browser.</span></li>
         <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Retired issuer keys stay published, so old receipts keep verifying after rotation.</span></li>
         <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Submitted as seller evidence on a live PayPal sandbox dispute, which PayPal accepted for review. No outcome is claimed.</span></li>
       </ul>
@@ -205,7 +205,7 @@ npm start   <span class="c"># http://localhost:8787/console</span></pre>
         <div class="code-hd"><span>anyone, offline</span><button class="btn" type="button" data-copy style="margin-left:auto"><svg class="i i-sm"><use href="/brand/icons.svg#i-copy"/></svg><span>Copy</span></button></div>
 <pre>curl https://agentguard-orcin.vercel.app/.well-known/agentguard-keys \
   &gt; keys.json   <span class="c"># pin this</span>
-npx intent-verify receipt.json --issuer-keys keys.json
+npx -p @agentguard-dev/intent-verifier intent-verify receipt.json --issuer-keys keys.json
 <span class="c"># VALID · passkey ✓ · issuer ✓ · 2 × RFC 3161 ✓ · anchor ✓</span></pre>
       </div>
     </div>
