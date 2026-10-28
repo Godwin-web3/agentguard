@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-28
+
+Packages republished from CI with npm provenance (signed build attestations). Package READMEs updated (badges, install commands, fixed MCP `npx` command). The MCP server reports version 0.1.1. No API changes.
+
 ### Added
 - Documentation site at `/docs` (concepts, guides, API, CLI, package reference, security, FAQ) with search.
 - OpenAPI 3.1 spec at `/openapi.json`, tested against the server's route table.
@@ -28,5 +32,6 @@ First public release of `@agentguard-dev/intent-verifier` and `@agentguard-dev/p
 - `@agentguard-dev/paypal-toolkit`: guard for PayPal's Agent Toolkit (Vercel AI SDK, OpenAI, MCP); money moves only through AgentGuard.
 - Supabase Postgres backend and Vercel deployment; owner console, receipt viewer and brand kit.
 
-[Unreleased]: https://github.com/Godwin-web3/agentguard/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Godwin-web3/agentguard/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Godwin-web3/agentguard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Godwin-web3/agentguard/releases/tag/v0.1.0

@@ -8,7 +8,7 @@ type AiTool = { description?: string; parameters: any; execute?: (a: any, o: any
  * Pass the AI SDK flavour of the toolkit (it exposes tool schemas + the merchant client).
  */
 export function createGuardedMcpServer(toolkit: { client: MerchantClient; getTools(): Record<string, AiTool> }, cfg: GuardConfig | PayPalGuard,
-  info = { name: "agentguard-paypal", version: "0.1.0" }): McpServer {
+  info = { name: "agentguard-paypal", version: "0.1.1" }): McpServer {
   const g = cfg instanceof PayPalGuard ? cfg : new PayPalGuard(cfg, toolkit.client);
   const server = new McpServer(info);
   const text = (v: unknown) => ({ content: [{ type: "text" as const, text: typeof v === "string" ? v : JSON.stringify(v, null, 2) }] });
