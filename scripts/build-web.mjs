@@ -1,6 +1,7 @@
-// Builds the static site (landing, console, receipt viewer, brand guidelines) into dist/site.
+// Builds the static site (landing, console, receipt viewer, brand guidelines, docs) into dist/site.
 // HTML partials: <!--#include name--> pulls web/partials/name.html (nested includes allowed).
 import { browserVerifierOptions } from "./web-bundle.mjs";
+import { buildDocs } from "./build-docs.mjs";
 import { build } from "esbuild";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -21,7 +22,7 @@ const expand = (s, depth = 0) => s.replace(/<!--#include ([a-z-]+)-->/g, (_, n) 
 const common = { bundle: true, minify: true, target: "es2022", legalComments: "none", logLevel: "warning", outdir: join(out, "assets") };
 // theme.js is a classic blocking <head> script (no flash of the wrong theme); site.js is tiny and shared.
 await build({ ...common, entryPoints: { theme: join(root, "web/src/theme.ts") }, format: "iife" });
-await build({ ...common, entryPoints: { site: join(root, "web/src/site.ts"), console: join(root, "web/src/console.ts") }, format: "esm" });
+await build({ ...common, entryPoints: { site: join(root, "web/src/site.ts"), console: join(root, "web/src/console.ts"), docs: join(root, "web/src/docs.ts") }, format: "esm" });
 // Pages that verify receipts carry the shared verifier with browser shims for node:crypto and Buffer.
 const heavy = Object.fromEntries([["receipt", "web/src/receipt.ts"]].filter(([, f]) => existsSync(join(root, f))).map(([k, f]) => [k, join(root, f)]));
 if (Object.keys(heavy).length) await build({ ...common, entryPoints: heavy, ...browserVerifierOptions(root) });
@@ -44,6 +45,9 @@ for (const [src, dst] of Object.entries(pages)) {
   mkdirSync(dirname(join(out, dst)), { recursive: true });
   writeFileSync(join(out, dst), html);
 }
+// Docs (/docs/<slug>), docs/search.json and /openapi.json.
+const docs = buildDocs({ root, out, expand, assets: manifest });
+writeFileSync(join(out, "docs/pages.json"), JSON.stringify(docs));
 
 cpSync(join(root, "web/site.webmanifest"), join(out, "site.webmanifest"));
 cpSync(join(root, "web/samples"), join(out, "samples"), { recursive: true });

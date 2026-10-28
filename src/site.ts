@@ -8,7 +8,7 @@ export const SITE_CSP = "default-src 'self'; script-src 'self'; style-src 'self'
 const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json", ".txt": "text/plain; charset=utf-8", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json" };
 /** Clean URLs for the pages. Everything else must be a real file under the built site directory (npm run build:web). */
-const PAGES: Record<string, string> = { "/": "index.html", "/console": "console.html", "/receipt": "receipt.html", "/brand": "brand/index.html", "/brand/": "brand/index.html" };
+const PAGES: Record<string, string> = { "/": "index.html", "/console": "console.html", "/receipt": "receipt.html", "/brand": "brand/index.html", "/brand/": "brand/index.html", "/docs": "docs/index.html", "/docs/": "docs/index.html" };
 
 function siteRoot(): string | null {
   const c = [process.env.AGENTGUARD_SITE_DIR, resolve(process.cwd(), "dist/site")];
@@ -22,7 +22,8 @@ const cache = new Map<string, { headers: Record<string, string>; body: Buffer }>
 export function siteFile(pathname: string): { headers: Record<string, string>; body: Buffer } | null {
   if (root === undefined) root = siteRoot();
   if (!root) return null;
-  const rel = PAGES[pathname] ?? decodeURIComponent(pathname).replace(/^\/+/, "");
+  const doc = /^\/docs\/([a-z0-9-]+)\/?$/.exec(pathname);
+  const rel = PAGES[pathname] ?? (doc ? `docs/${doc[1]}.html` : decodeURIComponent(pathname).replace(/^\/+/, ""));
   if (!rel || rel.split("/").some(p => p.startsWith(".")) || !TYPES[extname(rel)]) return null;
   const abs = resolve(root, rel);
   if (!abs.startsWith(root + sep)) return null;

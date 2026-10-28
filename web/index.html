@@ -17,8 +17,12 @@
       <h1 class="display">Agent payments, held to what your user signed.</h1>
       <p class="lede">Your user sets the bounds once, with a passkey. AgentGuard checks every payment an agent proposes against them before PayPal moves money, and issues a receipt that holds up in a dispute.</p>
       <div class="row gap-3 wrap">
-        <a class="btn btn-primary btn-lg" href="#quickstart">Get started<svg class="i"><use href="/brand/icons.svg#i-arrow-right"/></svg></a>
+        <a class="btn btn-primary btn-lg" href="/docs/quickstart">Get started<svg class="i"><use href="/brand/icons.svg#i-arrow-right"/></svg></a>
         <a class="btn btn-secondary btn-lg" href="/receipt?sample=sandbox"><svg class="i"><use href="/brand/icons.svg#g-receipt"/></svg>Verify a real receipt</a>
+      </div>
+      <div class="npm-pills" aria-label="Packages on npm">
+        <a class="npm-pill" href="https://www.npmjs.com/package/@agentguard-dev/intent-verifier"><span class="mono">npm i @agentguard-dev/intent-verifier</span></a>
+        <a class="npm-pill" href="https://www.npmjs.com/package/@agentguard-dev/paypal-toolkit"><span class="mono">npm i @agentguard-dev/paypal-toolkit</span></a>
       </div>
       <p class="standards" aria-label="Standards used">WebAuthn <i>/</i> Ed25519 <i>/</i> RFC 3161 timestamps <i>/</i> PayPal Orders v2</p>
     </div>
@@ -170,20 +174,29 @@
   <div class="container two-col">
     <div class="section-hd" style="margin:0">
       <span class="eyebrow">Quickstart</span>
-      <h2 class="h2">Running locally <span class="tone">in about five minutes.</span></h2>
-      <p class="lede">Node 22, a PayPal sandbox app and nothing else. SQLite locally; Postgres and Vercel for deployment.</p>
+      <h2 class="h2">Install, run, verify <span class="tone">in about five minutes.</span></h2>
+      <p class="lede">Two packages on npm: a zero-dependency receipt verifier for merchants, and a guard for PayPal's Agent Toolkit for agent builders. The gateway runs on Node 22.6+ with a PayPal sandbox app; SQLite locally, Postgres and Vercel for deployment.</p>
       <div class="row gap-3 wrap" style="margin-top:8px">
-        <a class="btn btn-secondary" href="https://github.com/Godwin-web3/agentguard#run"><svg class="i"><use href="/brand/icons.svg#i-book-open"/></svg>Full guide</a>
-        <a class="btn btn-ghost" href="https://github.com/Godwin-web3/agentguard#mcp"><svg class="i"><use href="/brand/icons.svg#i-terminal"/></svg>MCP server</a>
+        <a class="btn btn-secondary" href="/docs/quickstart"><svg class="i"><use href="/brand/icons.svg#i-book-open"/></svg>Read the docs</a>
+        <a class="btn btn-ghost" href="/docs/toolkit"><svg class="i"><use href="/brand/icons.svg#i-terminal"/></svg>Agent Toolkit &amp; MCP</a>
+        <a class="btn btn-ghost" href="/docs/api"><svg class="i"><use href="/brand/icons.svg#i-code"/></svg>API reference</a>
       </div>
     </div>
     <div class="stack gap-4">
       <div class="tabs" role="tablist" aria-label="Quickstart steps">
-        <button role="tab" id="t-run" aria-controls="p-run" aria-selected="true">Run</button>
+        <button role="tab" id="t-npm" aria-controls="p-npm" aria-selected="true">Install</button>
+        <button role="tab" id="t-run" aria-controls="p-run" aria-selected="false" tabindex="-1">Run</button>
         <button role="tab" id="t-pay" aria-controls="p-pay" aria-selected="false" tabindex="-1">Propose</button>
         <button role="tab" id="t-verify" aria-controls="p-verify" aria-selected="false" tabindex="-1">Verify</button>
       </div>
-      <div class="code" id="p-run" role="tabpanel" aria-labelledby="t-run">
+      <div class="code" id="p-npm" role="tabpanel" aria-labelledby="t-npm">
+        <div class="code-hd"><span>npm</span><button class="btn" type="button" data-copy style="margin-left:auto"><svg class="i i-sm"><use href="/brand/icons.svg#i-copy"/></svg><span>Copy</span></button></div>
+<pre><span class="c"># merchants: verify receipts offline (zero dependencies)</span>
+npm i @agentguard-dev/intent-verifier
+<span class="c"># agent builders: guard PayPal's Agent Toolkit (AI SDK, OpenAI, MCP)</span>
+npm i @agentguard-dev/paypal-toolkit @paypal/agent-toolkit</pre>
+      </div>
+      <div class="code" id="p-run" role="tabpanel" aria-labelledby="t-run" hidden>
         <div class="code-hd"><span>shell</span><button class="btn" type="button" data-copy style="margin-left:auto"><svg class="i i-sm"><use href="/brand/icons.svg#i-copy"/></svg><span>Copy</span></button></div>
 <pre><span class="c"># sandbox credentials only</span>
 git clone https://github.com/Godwin-web3/agentguard && cd agentguard
@@ -206,7 +219,7 @@ npm start   <span class="c"># http://localhost:8787/console</span></pre>
 <pre>curl https://agentguard-orcin.vercel.app/.well-known/agentguard-keys \
   &gt; keys.json   <span class="c"># pin this</span>
 npx -p @agentguard-dev/intent-verifier intent-verify receipt.json --issuer-keys keys.json
-<span class="c"># VALID · passkey ✓ · issuer ✓ · 2 × RFC 3161 ✓ · anchor ✓</span></pre>
+<span class="c"># VALID receipt poi_… then one ✓ line per check</span></pre>
       </div>
     </div>
   </div>

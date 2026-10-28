@@ -1,0 +1,7 @@
+[
+  { "title": "Getting started", "pages": ["index", "quickstart"] },
+  { "title": "Concepts", "pages": ["mandates", "passkeys", "payment-flow", "receipts", "anchoring", "ap2", "disputes"] },
+  { "title": "Guides", "pages": ["toolkit", "merchant-verification", "dispute-evidence", "self-hosting", "key-rotation"] },
+  { "title": "Reference", "pages": ["api", "cli", "packages", "configuration"] },
+  { "title": "Project", "pages": ["security", "faq", "changelog"] }
+]

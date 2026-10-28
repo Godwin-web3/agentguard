@@ -20,6 +20,8 @@ export interface App {
   runMaintenance: () => Promise<unknown>;
   store: Store;
   close: () => Promise<void>;
+  /** Every route the handler serves (method, path pattern, auth); used to check docs/openapi.json. */
+  routes: () => { method: string; path: string; auth: string }[];
 }
 
 /**
@@ -115,9 +117,9 @@ if (opts.background) { void runMaintenance(); setInterval(() => void runMaintena
 
 type Handler = (ctx: { req: IncomingMessage; body: any; params: string[]; query: URLSearchParams; agent?: { agent_id: string; user_id: string } }) => Promise<unknown> | unknown;
 type Auth = "admin" | "agent" | "none" | "cron";
-const routes: { method: string; re: RegExp; auth: Auth; h: Handler }[] = [];
+const routes: { method: string; path: string; re: RegExp; auth: Auth; h: Handler }[] = [];
 const route = (method: string, path: string, auth: Auth, h: Handler) =>
-  routes.push({ method, re: new RegExp("^" + path.replace(/:\w+/g, "([^/]+)") + "$"), auth, h });
+  routes.push({ method, path, re: new RegExp("^" + path.replace(/:\w+/g, "([^/]+)") + "$"), auth, h });
 
 // ---- public ----
 route("GET", "/health", "none", async () => {
@@ -307,5 +309,6 @@ async function handler(rq: IncomingMessage, res: ServerResponse): Promise<unknow
     send(res, code, { error: code === 500 ? "internal error" : e.message });
   }
 }
-return { handler, runAnchor, runMaintenance, store, close: () => sql.close() };
+return { handler, runAnchor, runMaintenance, store, close: () => sql.close(),
+  routes: () => [...routes.map(r => ({ method: r.method, path: r.path, auth: r.auth as string })), { method: "GET", path: "/healthz", auth: "none" }, { method: "HEAD", path: "/healthz", auth: "none" }] };
 }

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability (private)
+    url: https://github.com/Godwin-web3/agentguard/security/advisories/new
+    about: Please report security issues privately.
+  - name: Documentation
+    url: https://agentguard-orcin.vercel.app/docs
+    about: Guides, API reference and FAQ.
