@@ -2,13 +2,13 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { verifyReceipt, type VerifyOptions } from "./verify.ts";
-import { buildDisputeEvidence, submitDisputeEvidence } from "./evidence.ts";
+import { buildDisputeEvidence, submitDisputeEvidence, fetchDispute, chooseEvidenceType } from "./evidence.ts";
 
 const USAGE = `intent-verify: verify an AgentGuard Proof-of-Intent receipt, offline by default.
 
   intent-verify <receipt.json> [options]
   intent-verify ap2 <receipt.json>          print the receipt's AP2 mandates (Intent/Cart/Payment) as JSON
-  intent-verify evidence <receipt.json> --out <dir> [--evidence-type T] [--submit <dispute_id>] [options]
+  intent-verify evidence <receipt.json> --out <dir> [--dispute <id>] [--evidence-type T] [--submit <dispute_id>] [options]
 
 Options:
   --issuer-key <pem file>   AgentGuard issuer public key to trust (from /.well-known/agentguard-key)
@@ -22,6 +22,8 @@ Options:
   --require-timestamp       fail unless the receipt carries a verified RFC 3161 timestamp
   --require-anchor          fail unless the receipt carries a timestamped audit-anchor inclusion proof
   --max-anchor-lag <min>    maximum minutes between receipt and the anchor that covers it (default 1440)
+  --dispute <id>            (evidence) read this dispute to pick the evidence type PayPal requested; needs PAYPAL_CLIENT_ID/SECRET
+  --evidence-type <T>       (evidence) override the evidence type; default: requested type, else by dispute reason, else PROOF_OF_RECEIPT_COPY
   --json                    machine-readable output
 Exit code: 0 all checks pass, 1 a check failed, 2 usage/input error.`;
 
@@ -34,7 +36,7 @@ async function main(argv: string[]) {
   const json = flag("--json"), live = flag("--paypal"), allowAdmin = flag("--allow-admin-approval");
   const keysFile = one("--issuer-keys");
   const keyFile = one("--issuer-key"), origins = many("--origin"), payees = many("--payee");
-  const out = one("--out"), submit = one("--submit"), evType = one("--evidence-type");
+  const out = one("--out"), submit = one("--submit"), evType = one("--evidence-type"), disputeArg = one("--dispute");
   if (args[0] === "ap2") { const e = JSON.parse(readFileSync(args[1], "utf8")); if (!e?.receipt?.ap2) { console.error("receipt has no AP2 views"); return 1; } console.log(JSON.stringify(e.receipt.ap2, null, 2)); return 0; }
   const file = args[0]; if (!file) { console.error(USAGE); return 2; }
   let env: any; try { env = JSON.parse(readFileSync(file, "utf8")); } catch (e) { console.error(`cannot read ${file}: ${(e as Error).message}`); return 2; }
@@ -49,7 +51,7 @@ async function main(argv: string[]) {
   if (allowAdmin) opts.allowAdminApproval = true;
   if (origins.length) opts.expectedOrigins = origins;
   if (payees.length) opts.expectedPayee = payees;
-  if (live || submit) opts.paypal = creds();
+  if (live || submit || disputeArg) opts.paypal = creds();
   const roots = many("--tsa-root");
   if (roots.length) opts.tsaRoots = Object.fromEntries(roots.map(r => { const i = r.indexOf("="); return [r.slice(0, i), readFileSync(r.slice(i + 1), "utf8")]; }));
   if (flag("--require-timestamp")) opts.requireTimestamp = true;
@@ -65,7 +67,14 @@ async function main(argv: string[]) {
   }
   if (evidence) {
     if (!out) { console.error("--out <dir> is required for evidence"); return 2; }
-    const ev = buildDisputeEvidence(env, v, { evidenceType: evType });
+    // With a dispute id (--dispute or --submit) and merchant credentials, read the dispute and use the evidence type
+    // PayPal requested from the seller; fall back to the dispute reason, then PROOF_OF_RECEIPT_COPY.
+    const disputeId = disputeArg ?? submit;
+    let dispute: any = null;
+    if (disputeId) { try { dispute = await fetchDispute(disputeId, creds()); } catch (e) { console.error(`! could not read dispute ${disputeId}: ${(e as Error).message}; falling back`); } }
+    const choice = chooseEvidenceType(dispute, evType);
+    console.log(`evidence type ${choice.evidence_type} (${choice.source})`); for (const n of choice.notes) console.log(`  ! ${n}`);
+    const ev = buildDisputeEvidence(env, v, { evidenceType: choice.evidence_type });
     mkdirSync(out, { recursive: true });
     writeFileSync(join(out, "provide-evidence.input.json"), JSON.stringify(ev.input, null, 2));
     for (const f of ev.files) writeFileSync(join(out, f.name), f.data);

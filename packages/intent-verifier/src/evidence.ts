@@ -66,3 +66,54 @@ export async function submitDisputeEvidence(disputeId: string, ev: DisputeEviden
   const text = await res.text(); let body: any = text; try { body = JSON.parse(text); } catch {}
   return { status: res.status, body };
 }
+
+/** Dispute reason -> evidence type to use when PayPal has not (or no longer) listed a REQUESTED_FROM_SELLER item. */
+export const REASON_FALLBACK: Record<string, string> = {
+  MERCHANDISE_OR_SERVICE_NOT_RECEIVED: "PROOF_OF_FULFILLMENT",
+  MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED: "ITEM_DESCRIPTION",
+  UNAUTHORISED: "PROOF_OF_RECEIPT_COPY",
+  CREDIT_NOT_PROCESSED: "PROOF_OF_RECEIPT_COPY",
+  DUPLICATE_TRANSACTION: "PROOF_OF_RECEIPT_COPY",
+  INCORRECT_AMOUNT: "PROOF_OF_RECEIPT_COPY",
+  PAYMENT_BY_OTHER_MEANS: "PROOF_OF_RECEIPT_COPY",
+  CANCELED_RECURRING_BILLING: "BILLING_AGREEMENT",
+};
+export const DEFAULT_EVIDENCE_TYPE = "PROOF_OF_RECEIPT_COPY";
+
+export interface EvidenceTypeChoice { evidence_type: string; source: "explicit" | "requested_from_seller" | "reason_fallback" | "default"; notes: string[] }
+
+/**
+ * Pick the evidence type for a dispute: an explicit --evidence-type wins; otherwise the most recent evidence PayPal
+ * REQUESTED_FROM_SELLER (PayPal rejects other types with EVIDENCE_TYPE_IS_NOT_ALLOWED); otherwise a type derived from
+ * the dispute reason; otherwise PROOF_OF_RECEIPT_COPY.
+ */
+export function chooseEvidenceType(dispute: any | null, explicit?: string): EvidenceTypeChoice {
+  const notes: string[] = [];
+  if (dispute) {
+    if (dispute.status && dispute.status !== "WAITING_FOR_SELLER_RESPONSE") notes.push(`dispute status is ${dispute.status}; PayPal accepts seller evidence only in WAITING_FOR_SELLER_RESPONSE`);
+    if (Array.isArray(dispute.links) && !dispute.links.some((l: any) => l?.rel === "provide_evidence" || /provide-evidence$/.test(l?.href ?? "")))
+      notes.push("dispute has no provide-evidence link right now");
+  }
+  const requested = ((dispute?.evidences ?? []) as any[]).filter(e => e?.source === "REQUESTED_FROM_SELLER" && e.evidence_type)
+    .sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")));
+  if (explicit) {
+    if (requested.length && !requested.some(r => r.evidence_type === explicit)) notes.push(`PayPal requested ${requested.map(r => r.evidence_type).join(", ")}, not ${explicit}`);
+    return { evidence_type: explicit, source: "explicit", notes };
+  }
+  if (requested.length) return { evidence_type: requested[0].evidence_type, source: "requested_from_seller", notes };
+  const byReason = REASON_FALLBACK[dispute?.reason ?? ""];
+  if (byReason) return { evidence_type: byReason, source: "reason_fallback", notes: [...notes, `no REQUESTED_FROM_SELLER evidence listed; using ${byReason} for reason ${dispute.reason}`] };
+  return { evidence_type: DEFAULT_EVIDENCE_TYPE, source: "default", notes };
+}
+
+/** Read a dispute with the merchant's own credentials (GET /v1/customer/disputes/{id}). */
+export async function fetchDispute(disputeId: string, o: { clientId: string; clientSecret: string; apiBase?: string; fetch?: typeof fetch }): Promise<any> {
+  const base = o.apiBase ?? "https://api-m.paypal.com"; const http = o.fetch ?? fetch;
+  const t = await http(`${base}/v1/oauth2/token`, { method: "POST", body: "grant_type=client_credentials",
+    headers: { authorization: "Basic " + Buffer.from(`${o.clientId}:${o.clientSecret}`).toString("base64"), "content-type": "application/x-www-form-urlencoded" } });
+  if (!t.ok) throw new Error(`PayPal token request failed: HTTP ${t.status}`);
+  const token = (await t.json() as any).access_token;
+  const r = await http(`${base}/v1/customer/disputes/${encodeURIComponent(disputeId)}`, { headers: { authorization: `Bearer ${token}` } });
+  if (!r.ok) throw new Error(`GET dispute ${disputeId}: HTTP ${r.status}`);
+  return r.json();
+}
