@@ -80,7 +80,7 @@
     "@paypal/agent-toolkit": "^1.11.0",
     "@types/node": "^22.20.5",
     "ai": "^4.3.19",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "homepage": "https://agentguard-orcin.vercel.app",
   "bugs": {
