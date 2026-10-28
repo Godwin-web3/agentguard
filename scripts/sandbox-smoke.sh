@@ -16,7 +16,7 @@ D=$(curl -sf -X POST "$U/v1/mandates/draft-from-text" -H "$A" -H "$J" \
 echo "$D" | jqp "'\n'.join(d['summary'])"
 MID=$(echo "$D" | jqp "d['mandate']['mandate_id']"); H=$(echo "$D" | jqp "d['mandate_hash']")
 curl -sf -X POST "$U/v1/mandates/$MID/confirm" -H "$A" -H "$J" -d "{\"mandate_hash\":\"$H\"}" >/dev/null
-pay() { local PY="${PAYEE_JSON:-{\"email_address\":\"$2\"}}"; curl -s -X POST "$U/v1/agent/payments" -H "Authorization: Bearer $KEY" -H "$J" \
+pay() { local PY="{\"email_address\":\"$2\"}"; [ -n "${PAYEE_JSON:-}" ] && PY="$PAYEE_JSON"; curl -s -X POST "$U/v1/agent/payments" -H "Authorization: Bearer $KEY" -H "$J" \
   -d "{\"mandate_id\":\"$MID\",\"agent_id\":\"$AID\",\"idempotency_key\":\"$1-$RANDOM\",\"payee\":$PY,\"currency\":\"USD\",\"items\":[{\"name\":\"API credits\",\"quantity\":1,\"unit_amount\":\"$3\",\"category\":\"DIGITAL_GOODS\"}]${4:-}}" \
   | jqp "f\"{d.get('decision'):12} {d.get('status'):12} order={d.get('paypal',{}).get('order_id')} capture={d.get('paypal',{}).get('capture_id')} err={d.get('error')} {d.get('evaluation',{}).get('reasons')}\""; }
 echo "in policy:        $(pay ok "$PAYEE" 12.00)"
