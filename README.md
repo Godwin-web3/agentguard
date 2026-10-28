@@ -24,6 +24,7 @@ Agentic commerce gives agents a live payment capability. Detection of prompt inj
 | Agent impersonation | Per-agent API keys; proposals must match the authenticated agent |
 | Merchant substitution | Payee allowlist + verification of the payee PayPal reports on the order |
 | Revocation race | Status re-checked under lock, after approval, and again before capture |
+| Crash between authorize and capture | Recovery loop queries PayPal and converges; never captures if mandate is no longer active |
 
 ## Run
 ```bash
@@ -42,6 +43,24 @@ npm test       # threat-model test suite
 4. Agent: `POST /v1/agent/payments` or MCP `propose_payment`
 5. Escalations: `GET /v1/approvals`, `POST /v1/approvals/:id {approve}`
 6. `GET /v1/audit`, `GET /v1/audit/verify`
+
+### Recovery
+The process is safe to restart. On startup and every 5 minutes (override with `AGENTGUARD_RECOVER_INTERVAL_MS`) AgentGuard scans for payments still in `reserved` or `authorized` older than 60 seconds and converges them with PayPal:
+
+- `reserved` with no authorization id → marked failed (hold released). Never reached PayPal.
+- `authorized` where PayPal reports CAPTURED → synced to captured.
+- `authorized` where PayPal reports VOIDED, EXPIRED, or DENIED → synced to voided.
+- `authorized` where PayPal returns 404 → marked voided (authorization expired or purged).
+- `authorized` still open and the mandate is active → capture is finished.
+- `authorized` still open and the mandate is no longer active → voided. Recovery never captures against an inactive mandate.
+- Any other error (network, 5xx, rate limit) → logged and left for the next interval.
+
+Operators can inspect and trigger on demand (admin token required):
+```bash
+curl -H "Authorization: Bearer $AGENTGUARD_ADMIN_TOKEN" http://localhost:8787/v1/payments/stuck
+curl -X POST -H "Authorization: Bearer $AGENTGUARD_ADMIN_TOKEN" -H "content-type: application/json" \
+  -d '{"older_than_ms": 60000}' http://localhost:8787/v1/recover
+```
 
 ### Owner console
 `/console` (admin token required): describe a mandate in plain English, review the code-rendered summary, sign it;
