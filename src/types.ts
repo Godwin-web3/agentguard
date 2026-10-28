@@ -24,12 +24,22 @@ export interface Mandate {
   version: 1;
 }
 
-export type MandateStatus = "draft" | "active" | "revoked" | "exhausted" | "expired";
+/** "unsigned": legacy mandate activated before user-held keys existed. Never enforced until the user re-signs it. */
+export type MandateStatus = "draft" | "unsigned" | "active" | "revoked" | "exhausted" | "expired";
+
+/** A WebAuthn assertion from the user's passkey whose challenge is the signed digest. All fields base64url. */
+export interface UserSignature {
+  credential_id: string;
+  authenticator_data: string;
+  client_data_json: string;
+  signature: string;
+}
 
 export interface SignedMandate {
   mandate: Mandate;
-  mandate_hash: string;             // sha256(canonical(mandate))
-  signature: string;                // ed25519 over mandate_hash, base64
+  mandate_hash: string;                         // sha256(canonical(mandate))
+  user_signature: UserSignature | null;         // user's passkey over mandate_hash; required to enforce
+  revocation_signature: UserSignature | null;   // user's passkey over the revocation digest
   status: MandateStatus;
 }
 

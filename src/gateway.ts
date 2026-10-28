@@ -1,11 +1,12 @@
 import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { canonical, sha256, toMinor } from "./canonical.ts";
 import { evaluatePolicy, proposalHash } from "./policy.ts";
-import type { Signer } from "./keys.ts";
+import { mandateChallenge, revokeChallenge, type PasskeyService } from "./passkeys.ts";
+import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import type { RiskAnalyzer } from "./risk.ts";
 import type { PaymentRail } from "./paypal.ts";
 import type { Store, PaymentRow, PaymentStatus } from "./store.ts";
-import type { Decision, Evaluation, Mandate, MandateConstraints, PaymentProposal } from "./types.ts";
+import type { Decision, Evaluation, Mandate, MandateConstraints, PaymentProposal, SignedMandate, UserSignature } from "./types.ts";
 
 export interface ProposeResult {
   payment_id: string; decision: Decision; status: string; evaluation: Evaluation;
@@ -17,9 +18,9 @@ export class GatewayError extends Error { code: number; constructor(code: number
 const APPROVAL_TTL_MS = 15 * 60 * 1000;
 
 export class Gateway {
-  private store: Store; private signer: Signer; private risk: RiskAnalyzer; private rail: PaymentRail;
-  constructor(deps: { store: Store; signer: Signer; risk: RiskAnalyzer; rail: PaymentRail }) {
-    this.store = deps.store; this.signer = deps.signer; this.risk = deps.risk; this.rail = deps.rail;
+  private store: Store; private passkeys: PasskeyService; private risk: RiskAnalyzer; private rail: PaymentRail;
+  constructor(deps: { store: Store; passkeys: PasskeyService; risk: RiskAnalyzer; rail: PaymentRail }) {
+    this.store = deps.store; this.passkeys = deps.passkeys; this.risk = deps.risk; this.rail = deps.rail;
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS agents (agent_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, key_hash TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS wallets (user_id TEXT PRIMARY KEY, vault_id TEXT NOT NULL, payer_email TEXT, created_at TEXT NOT NULL);`);
   }
@@ -57,26 +58,51 @@ export class Gateway {
       constraints: input.constraints, created_at: now.toISOString(),
       expires_at: new Date(now.getTime() + (input.ttl_minutes ?? 60) * 60_000).toISOString(), version: 1 };
     const mandate_hash = sha256(canonical(mandate));
-    this.store.insertMandate({ mandate, mandate_hash, signature: "", status: "draft" });
+    this.store.insertMandate({ mandate, mandate_hash, user_signature: null, revocation_signature: null, status: "draft" });
     this.store.audit("mandate.drafted", mandate.mandate_id, { mandate, mandate_hash });
     return { mandate, mandate_hash };
   }
-  /** Step 2: user confirms the exact hash they reviewed. Signing activates it. */
-  confirmMandate(mandateId: string, reviewedHash: string): { mandate_id: string; signature: string } {
-    const sm = this.store.getMandate(mandateId);
-    if (!sm) throw new GatewayError(404, "mandate not found");
-    if (sm.status !== "draft") throw new GatewayError(409, `mandate is ${sm.status}`);
-    if (sha256(canonical(sm.mandate)) !== sm.mandate_hash || reviewedHash !== sm.mandate_hash) throw new GatewayError(409, "reviewed hash does not match mandate");
-    const signature = this.signer.sign(sm.mandate_hash);
-    this.store.setMandateSigned(mandateId, signature);
-    this.store.audit("mandate.activated", mandateId, { mandate_hash: sm.mandate_hash, signature });
-    return { mandate_id: mandateId, signature };
+  /** Step 2a: what the user's authenticator must sign. The challenge IS the mandate hash. */
+  async signingRequest(mandateId: string) {
+    const sm = this.mustMandate(mandateId);
+    if (sm.status !== "draft" && sm.status !== "unsigned") throw new GatewayError(409, `mandate is ${sm.status}`);
+    if (sha256(canonical(sm.mandate)) !== sm.mandate_hash) throw new GatewayError(409, "mandate body does not match its hash");
+    const options = await this.pk(() => this.passkeys.signingOptions(sm.mandate.user_id, mandateChallenge(sm.mandate_hash)));
+    return { mandate: sm.mandate, mandate_hash: sm.mandate_hash, options };
   }
-  async revokeMandate(mandateId: string, reason = "revoked by user"): Promise<void> {
-    const sm = this.store.getMandate(mandateId);
-    if (!sm) throw new GatewayError(404, "mandate not found");
-    this.store.setMandateStatus(mandateId, "revoked");
-    this.store.audit("mandate.revoked", mandateId, { reason });
+  /**
+   * Step 2b: the user's passkey assertion over the exact hash they reviewed activates the mandate.
+   * The server never signs mandates; it only verifies the user's signature, here and on every proposal.
+   */
+  async confirmMandate(mandateId: string, reviewedHash: string, assertion: AuthenticationResponseJSON): Promise<{ mandate_id: string; status: string; credential_id: string }> {
+    const sm = this.mustMandate(mandateId);
+    if (sm.status !== "draft" && sm.status !== "unsigned") throw new GatewayError(409, `mandate is ${sm.status}`);
+    if (sha256(canonical(sm.mandate)) !== sm.mandate_hash || reviewedHash !== sm.mandate_hash) throw new GatewayError(409, "reviewed hash does not match mandate");
+    if (!assertion) throw new GatewayError(400, "assertion (WebAuthn response signed by the user's passkey) is required");
+    const sig = await this.pk(() => this.passkeys.verifyAssertion(sm.mandate.user_id, assertion, mandateChallenge(sm.mandate_hash)));
+    if (!this.store.setMandateSigned(mandateId, sig)) throw new GatewayError(409, "mandate changed state while signing");
+    this.store.audit("mandate.activated", mandateId, { mandate_hash: sm.mandate_hash, user_signature: sig, resigned: sm.status === "unsigned" });
+    return { mandate_id: mandateId, status: "active", credential_id: sig.credential_id };
+  }
+  async revocationRequest(mandateId: string) {
+    const sm = this.mustMandate(mandateId);
+    const options = await this.pk(() => this.passkeys.signingOptions(sm.mandate.user_id, revokeChallenge(sm.mandate_hash)));
+    return { mandate_id: mandateId, mandate_hash: sm.mandate_hash, statement: `agentguard:revoke:v1:${sm.mandate_hash}`, options };
+  }
+  /**
+   * Revocation of an enforceable mandate must be signed by the user's passkey (challenge = sha256("agentguard:revoke:v1:"+hash)).
+   * Drafts and unsigned legacy mandates carry no authority, so the owner console may discard them without a signature.
+   */
+  async revokeMandate(mandateId: string, assertion: AuthenticationResponseJSON | undefined, reason = "revoked by user"): Promise<void> {
+    const sm = this.mustMandate(mandateId);
+    if (sm.status === "revoked") return;
+    let sig: UserSignature | null = null;
+    if (sm.status !== "draft" && sm.status !== "unsigned") {
+      if (!assertion) throw new GatewayError(400, "revocation must be signed with the user's passkey (assertion required)");
+      sig = await this.pk(() => this.passkeys.verifyAssertion(sm.mandate.user_id, assertion, revokeChallenge(sm.mandate_hash)));
+    }
+    this.store.setMandateRevoked(mandateId, sig);
+    this.store.audit("mandate.revoked", mandateId, { reason: String(reason).slice(0, 500), revocation_signature: sig, prior_status: sm.status });
     for (const a of this.store.pendingApprovals().filter(a => a.mandate_id === mandateId)) {
       if (this.store.resolveApproval(a.approval_id, "denied")) this.store.transition(a.payment_id, ["needs_human"], "denied", { error: "mandate revoked" });
     }
@@ -86,13 +112,26 @@ export class Gateway {
       catch (e) { this.store.audit("payment.void_failed", p.payment_id, { error: (e as Error).message }); }
     }
   }
-  mandateView(mandateId: string) {
-    const sm = this.store.getMandate(mandateId);
-    if (!sm) throw new GatewayError(404, "mandate not found");
-    return { ...sm, spend: this.store.spendState(mandateId), signature_valid: this.signatureValid(sm) };
+  async mandateView(mandateId: string) {
+    const sm = this.mustMandate(mandateId);
+    return { ...sm, spend: this.store.spendState(mandateId), signature_valid: await this.signatureValid(sm) };
   }
-  private signatureValid(sm: { mandate: Mandate; mandate_hash: string; signature: string }): boolean {
-    return !!sm.signature && sha256(canonical(sm.mandate)) === sm.mandate_hash && this.signer.verify(sm.mandate_hash, sm.signature);
+  private mustMandate(id: string): SignedMandate {
+    const sm = this.store.getMandate(id);
+    if (!sm) throw new GatewayError(404, "mandate not found");
+    return sm;
+  }
+  private async pk<T>(fn: () => Promise<T>): Promise<T> {
+    try { return await fn(); } catch (e: any) { throw e instanceof GatewayError ? e : new GatewayError(e?.code ?? 400, e?.message ?? String(e)); }
+  }
+  /** Re-verifies the user's passkey signature against the CURRENT mandate body. Tampering with body, hash or signature fails. */
+  private async signatureValid(sm: SignedMandate): Promise<boolean> {
+    return sha256(canonical(sm.mandate)) === sm.mandate_hash
+      && await this.passkeys.reverify(sm.mandate.user_id, sm.user_signature, mandateChallenge(sm.mandate_hash));
+  }
+  /** Signature check done outside the write lock; under the lock we only confirm nothing it covered has changed. */
+  private sameSigned(a: SignedMandate, b: SignedMandate): boolean {
+    return a.mandate_hash === b.mandate_hash && canonical(a.mandate) === canonical(b.mandate) && canonical(a.user_signature) === canonical(b.user_signature);
   }
 
   // ---------- payments ----------
@@ -107,6 +146,7 @@ export class Gateway {
     const sm = this.store.getMandate(p.mandate_id);
     if (!sm) throw new GatewayError(404, "mandate not found");
     const risk = await this.risk.analyze(sm.mandate, p);   // advisory, computed outside the lock
+    const sigOk = await this.signatureValid(sm);
 
     const paymentId = "pay_" + randomUUID();
     let result: ProposeResult;
@@ -114,7 +154,7 @@ export class Gateway {
       result = this.store.tx(() => {
         const fresh = this.store.getMandate(p.mandate_id)!;   // re-read under lock (revocation race)
         const status = fresh.status === "active" && new Date() >= new Date(fresh.mandate.expires_at) ? "expired" : fresh.status;
-        const { checks, amount_minor, needsHuman } = evaluatePolicy({ mandate: fresh.mandate, status, signatureValid: this.signatureValid(fresh),
+        const { checks, amount_minor, needsHuman } = evaluatePolicy({ mandate: fresh.mandate, status, signatureValid: sigOk && this.sameSigned(sm, fresh),
           proposal: p, state: this.store.spendState(p.mandate_id), now: new Date() });
         const failed = checks.filter(c => !c.pass);
         const riskEscalations = risk.filter(r => r.severity !== "low").map(r => `${r.signal}: ${r.detail}`);
@@ -165,9 +205,11 @@ export class Gateway {
       this.store.audit("approval.denied", pay.payment_id, { approval_id: approvalId, approver });
       return this.view(pay.payment_id);
     }
+    const before = this.store.getMandate(pay.mandate_id)!;
+    const sigOk = await this.signatureValid(before);
     const ok = this.store.tx(() => {
       const sm = this.store.getMandate(pay.mandate_id)!;
-      if (sm.status !== "active" || new Date() >= new Date(sm.mandate.expires_at) || !this.signatureValid(sm)) return false;
+      if (sm.status !== "active" || new Date() >= new Date(sm.mandate.expires_at) || !sigOk || !this.sameSigned(before, sm)) return false;
       if (!this.store.resolveApproval(approvalId, "approved")) throw new GatewayError(409, "approval already resolved");
       return this.store.transition(pay.payment_id, ["needs_human"], "reserved");
     });
@@ -200,7 +242,7 @@ export class Gateway {
 
         const remote = await this.rail.getAuthorization(pay.paypal_authorization_id);
         const sm = this.store.getMandate(pay.mandate_id);
-        const mandateOk = sm && sm.status === "active" && new Date() < new Date(sm.mandate.expires_at);
+        const mandateOk = !!sm && sm.status === "active" && new Date() < new Date(sm.mandate.expires_at) && await this.signatureValid(sm);
 
         if (remote.status === "CAPTURED") {
           this.store.transition(pay.payment_id, ["authorized"], "captured", { paypal_capture_id: remote.capture_id ?? null });

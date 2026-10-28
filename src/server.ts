@@ -3,10 +3,12 @@ import { timingSafeEqual, randomBytes } from "node:crypto";
 import { Store } from "./store.ts";
 import { Signer } from "./keys.ts";
 import { Gateway, GatewayError } from "./gateway.ts";
+import { PasskeyService } from "./passkeys.ts";
 import { HeuristicRiskAnalyzer, LLMRiskAnalyzer, CompositeRiskAnalyzer, type RiskAnalyzer } from "./risk.ts";
 import { PayPalClient, type PaymentRail } from "./paypal.ts";
 import { draftFromText, summarize, type LLMConfig } from "./drafter.ts";
 import { readFileSync } from "node:fs";
+import { canonical } from "./canonical.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const PUBLIC_URL = process.env.AGENTGUARD_PUBLIC_URL ?? `http://localhost:${PORT}`;
@@ -34,8 +36,11 @@ const CONSOLE_HTML = readFileSync(new URL("./console.html", import.meta.url), "u
 const store = new Store();
 const WALLET_SETUP_TTL_MS = 30 * 60 * 1000;
 store.db.exec("CREATE TABLE IF NOT EXISTS wallet_setups (state TEXT PRIMARY KEY, user_id TEXT NOT NULL, setup_token_id TEXT NOT NULL, expires_at TEXT NOT NULL)");
+// The server key signs audit-log attestations only. Mandates and revocations are signed by the user's passkey.
 const signer = Signer.load();
-const gw = new Gateway({ store, signer, risk, rail });
+const RP_ID = process.env.AGENTGUARD_RP_ID ?? new URL(PUBLIC_URL).hostname;
+const passkeys = new PasskeyService(store, { rpID: RP_ID, rpName: process.env.AGENTGUARD_RP_NAME ?? "AgentGuard", origin: new URL(PUBLIC_URL).origin });
+const gw = new Gateway({ store, passkeys, risk, rail });
 
 // Per-agent sliding window on propose. Stops a compromised agent from flooding the gateway.
 const RATE_LIMIT = Number(process.env.AGENTGUARD_AGENT_RATE_LIMIT ?? 30);
@@ -76,7 +81,7 @@ route("GET", "/health", "none", () => {
   const stuck = store.listStuck(new Date(Date.now() - 60_000).toISOString()).length;
   return { ok: stuck === 0 && !lastRecovery?.error, stuck, last_recovery: lastRecovery };
 });
-route("GET", "/.well-known/agentguard-key", "none", () => ({ alg: "Ed25519", public_key_pem: signer.publicKeyPem() }));
+route("GET", "/.well-known/agentguard-key", "none", () => ({ alg: "Ed25519", use: "audit-attestation", public_key_pem: signer.publicKeyPem() }));
 
 // ---- owner (the human delegating authority) ----
 route("POST", "/v1/agents", "admin", ({ body }) => gw.registerAgent(req(body, "user_id"), req(body, "agent_id")));
@@ -111,8 +116,15 @@ route("POST", "/v1/mandates/draft-from-text", "admin", async ({ body }) => {
   const m = gw.draftMandate({ user_id: req(body, "user_id"), agent_id: req(body, "agent_id"), purpose: d.purpose, constraints: d.constraints, ttl_minutes: d.ttl_minutes });
   return { ...m, summary: d.summary, warnings: d.warnings, source: d.source };
 });
-route("POST", "/v1/mandates/:id/confirm", "admin", ({ params, body }) => gw.confirmMandate(params[0], req(body, "mandate_hash")));
-route("POST", "/v1/mandates/:id/revoke", "admin", async ({ params, body }) => { await gw.revokeMandate(params[0], body?.reason); return gw.mandateView(params[0]); });
+// Passkeys: one per user, created from the owner console (navigator.credentials.create).
+route("GET", "/v1/users/:id/passkey", "admin", ({ params }) => { const c = passkeys.credentialFor(params[0]); return { registered: !!c, credential_id: c?.credential_id ?? null }; });
+route("POST", "/v1/users/:id/passkey/options", "admin", ({ params }) => pkCall(() => passkeys.registrationOptions(params[0])));
+route("POST", "/v1/users/:id/passkey", "admin", ({ params, body }) => pkCall(() => passkeys.verifyRegistration(params[0], body?.response)));
+// Mandate activation and revocation: the user's passkey signs; the admin token alone cannot do either.
+route("POST", "/v1/mandates/:id/sign-request", "admin", ({ params }) => gw.signingRequest(params[0]));
+route("POST", "/v1/mandates/:id/confirm", "admin", ({ params, body }) => gw.confirmMandate(params[0], req(body, "mandate_hash"), body?.assertion));
+route("POST", "/v1/mandates/:id/revoke-request", "admin", ({ params }) => gw.revocationRequest(params[0]));
+route("POST", "/v1/mandates/:id/revoke", "admin", async ({ params, body }) => { await gw.revokeMandate(params[0], body?.assertion, body?.reason); return gw.mandateView(params[0]); });
 route("GET", "/v1/mandates", "admin", () => store.listMandates().map(m => ({ ...m, spend: store.spendState(m.mandate.mandate_id), summary: summarize(m.mandate.constraints) })));
 route("GET", "/v1/mandates/:id", "admin", ({ params }) => gw.mandateView(params[0]));
 route("GET", "/v1/approvals", "admin", () => store.pendingApprovals().map(a => ({ ...a, proposal: JSON.parse(a.proposal), evaluation: JSON.parse(a.evaluation) })));
@@ -130,10 +142,17 @@ route("POST", "/v1/recover", "admin", async ({ body }) => {
 });
 route("GET", "/v1/audit", "admin", ({ query }) => store.auditLog(Number(query.get("limit") ?? 200)));
 route("GET", "/v1/audit/verify", "admin", () => store.verifyAuditChain());
+// Signed checkpoint of the audit chain head: publish or archive these to detect any later rewrite of history.
+route("GET", "/v1/audit/attestation", "admin", () => {
+  const head = store.auditLog(1)[0];
+  const statement = { v: 1, kind: "agentguard.audit.checkpoint", seq: head?.seq ?? 0, head_hash: head?.hash ?? "GENESIS",
+    chain_ok: store.verifyAuditChain().ok, at: new Date().toISOString() };
+  return { statement, signature: signer.sign(canonical(statement)), alg: "Ed25519", key: "/.well-known/agentguard-key" };
+});
 
 // ---- agent (holds only its own API key; never PayPal credentials) ----
-route("GET", "/v1/agent/mandates/:id", "agent", ({ params, agent }) => {
-  const v = gw.mandateView(params[0]);
+route("GET", "/v1/agent/mandates/:id", "agent", async ({ params, agent }) => {
+  const v = await gw.mandateView(params[0]);
   if (v.mandate.agent_id !== agent!.agent_id) throw new GatewayError(404, "mandate not found");
   return { mandate: v.mandate, status: v.status, spend: v.spend };
 });
@@ -147,6 +166,9 @@ route("GET", "/v1/agent/payments/:id", "agent", ({ params, agent }) => {
   return v;
 });
 
+async function pkCall<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); } catch (e: any) { throw new GatewayError(e?.code ?? 400, e?.message ?? String(e)); }
+}
 function req(body: any, k: string): string { const v = body?.[k]; if (typeof v !== "string" || !v) throw new GatewayError(400, `${k} is required`); return v; }
 function safeEq(a: string, b: string) { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); }
 function send(res: ServerResponse, code: number, data: unknown) {

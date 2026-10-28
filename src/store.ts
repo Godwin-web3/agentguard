@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { canonical, sha256 } from "./canonical.ts";
-import type { MandateStatus, SignedMandate } from "./types.ts";
+import type { MandateStatus, SignedMandate, UserSignature } from "./types.ts";
 
 export type PaymentStatus = "rejected" | "needs_human" | "reserved" | "authorized" | "captured" | "voided" | "failed" | "denied";
 /** Statuses that hold budget. A rejected/voided/failed/denied payment releases it. */
@@ -38,6 +38,22 @@ export class Store {
         prev_hash TEXT NOT NULL, hash TEXT NOT NULL);
       CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT,'audit log is append-only'); END;
       CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'audit log is append-only'); END;`);
+    this.migrate();
+  }
+
+  /**
+   * v2: mandates are signed by the user's passkey, not by the server. Mandates activated under the old
+   * server-key scheme are moved to 'unsigned' and are never enforced until the user re-signs them.
+   */
+  private migrate(): void {
+    const cols = (this.db.prepare("PRAGMA table_info(mandates)").all() as any[]).map(c => c.name);
+    if (!cols.includes("user_signature")) this.db.exec("ALTER TABLE mandates ADD COLUMN user_signature TEXT");
+    if (!cols.includes("revocation_signature")) this.db.exec("ALTER TABLE mandates ADD COLUMN revocation_signature TEXT");
+    const legacy = this.db.prepare("SELECT mandate_id, status FROM mandates WHERE user_signature IS NULL AND status='active'").all() as any[];
+    for (const r of legacy) {
+      this.db.prepare("UPDATE mandates SET status='unsigned', updated_at=? WHERE mandate_id=?").run(new Date().toISOString(), r.mandate_id);
+      this.audit("mandate.migrated_unsigned", r.mandate_id, { previous_status: r.status, reason: "server-signed mandate; user passkey signature required" });
+    }
   }
 
   /** Runs fn inside BEGIN IMMEDIATE so concurrent proposals serialize on the write lock (no double-spend of budget). */
@@ -71,18 +87,28 @@ export class Store {
   // ---- mandates ----
   insertMandate(sm: SignedMandate): void {
     const now = new Date().toISOString(); const m = sm.mandate;
-    this.db.prepare("INSERT INTO mandates VALUES (?,?,?,?,?,?,?,?,?)")
-      .run(m.mandate_id, m.user_id, m.agent_id, canonical(m), sm.mandate_hash, sm.signature || null, sm.status, now, now);
+    this.db.prepare(`INSERT INTO mandates (mandate_id,user_id,agent_id,body,mandate_hash,signature,status,created_at,updated_at,user_signature,revocation_signature)
+      VALUES (?,?,?,?,?,NULL,?,?,?,?,?)`).run(m.mandate_id, m.user_id, m.agent_id, canonical(m), sm.mandate_hash, sm.status, now, now,
+        sm.user_signature ? canonical(sm.user_signature) : null, sm.revocation_signature ? canonical(sm.revocation_signature) : null);
   }
   getMandate(id: string): SignedMandate | null {
     const r = this.db.prepare("SELECT * FROM mandates WHERE mandate_id=?").get(id) as any;
-    return r ? { mandate: JSON.parse(r.body), mandate_hash: r.mandate_hash, signature: r.signature ?? "", status: r.status } : null;
+    return r ? { mandate: JSON.parse(r.body), mandate_hash: r.mandate_hash, status: r.status,
+      user_signature: r.user_signature ? JSON.parse(r.user_signature) : null,
+      revocation_signature: r.revocation_signature ? JSON.parse(r.revocation_signature) : null } : null;
   }
   listMandates(): SignedMandate[] {
     return (this.db.prepare("SELECT mandate_id FROM mandates ORDER BY created_at DESC").all() as any[]).map(r => this.getMandate(r.mandate_id)!);
   }
-  setMandateSigned(id: string, signature: string): void {
-    this.db.prepare("UPDATE mandates SET signature=?, status='active', updated_at=? WHERE mandate_id=? AND status='draft'").run(signature, new Date().toISOString(), id);
+  /** CAS draft|unsigned -> active with the user's signature. */
+  setMandateSigned(id: string, sig: UserSignature): boolean {
+    const r = this.db.prepare("UPDATE mandates SET user_signature=?, status='active', updated_at=? WHERE mandate_id=? AND status IN ('draft','unsigned')")
+      .run(canonical(sig), new Date().toISOString(), id);
+    return Number(r.changes) === 1;
+  }
+  setMandateRevoked(id: string, sig: UserSignature | null): void {
+    this.db.prepare("UPDATE mandates SET status='revoked', revocation_signature=?, updated_at=? WHERE mandate_id=?")
+      .run(sig ? canonical(sig) : null, new Date().toISOString(), id);
   }
   setMandateStatus(id: string, status: MandateStatus): void {
     this.db.prepare("UPDATE mandates SET status=?, updated_at=? WHERE mandate_id=?").run(status, new Date().toISOString(), id);
