@@ -3,6 +3,7 @@ import { canonical, sha256 } from "./canonical.ts";
 import type { Signer } from "./keys.ts";
 import type { PasskeyService } from "./passkeys.ts";
 import type { Store } from "./store.ts";
+import { buildAp2 } from "../packages/intent-verifier/src/ap2.ts";
 
 /**
  * Proof-of-Intent receipts. For every captured payment AgentGuard issues one signed, self-contained document
@@ -101,6 +102,8 @@ export class ReceiptService {
       },
       audit: { capture_entry_seq: head.seq, capture_entry_hash: head.hash },
     };
+    // AP2-compatible views (Intent/Cart/Payment Mandates + receipts), derived deterministically and covered by the signature.
+    (receipt as any).ap2 = buildAp2(receipt);
     const body = canonical(receipt);
     const env: ReceiptEnvelope = { receipt, signature: { alg: "Ed25519", key_id: receipt.issuer.key_id, public_key_pem: this.signer.publicKeyPem(), value: this.signer.sign(body) } };
     const receipt_hash = sha256(body);

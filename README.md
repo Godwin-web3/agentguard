@@ -32,6 +32,29 @@ Tampered receipts, swapped orders, forged mandates and wrong issuer keys all fai
 - Human approvals today are authenticated with the operator's admin token, not a passkey (`approval.method: "admin_token"`).
 - The passkey proves the *holder of that credential* signed the mandate; binding the credential to a real person is the enrollment step's job.
 
+## AP2 compatibility: AP2-style verifiable intent, enforced and dispute-ready on PayPal, today
+Every receipt also carries an `ap2` block: the same purchase expressed as [Agent Payments Protocol (AP2)](https://github.com/google-agentic-commerce/AP2) mandates, using the JSON shapes in AP2's `code/sdk/schemas/ap2` (pinned to commit `e1ea56d`, Apr 2026). AP2 v0.1 called these the Intent / Cart / Payment Mandates; the current spec splits intent into Open Checkout + Open Payment Mandates and calls the cart a Checkout Mandate. AgentGuard emits the current shapes under the v0.1 role names:
+
+| AP2 role | AP2 object (`vct`) | Built from | Fidelity |
+|---|---|---|---|
+| Intent Mandate | `open_checkout_mandate` (`mandate.checkout.open.1`): `checkout.allowed_merchants`, `checkout.line_items` | passkey-signed mandate: payee allowlist, SKU allowlist, max qty | Exact when `sku_allowlist` is set; otherwise line items come from the order (`agentguard_constraint_source: "order_items"`) |
+| Intent Mandate | `open_payment_mandate` (`mandate.payment.open.1`): `payment.reference`, `amount_range`, `budget`, `agent_recurrence`, `execution_date`, `allowed_payees` | mandate limits and window | Exact mapping of per-tx cap, total budget, count, window. Categories and blocklists have no AP2 constraint and stay AgentGuard-only |
+| Cart Mandate | `checkout_mandate` (`mandate.checkout.1`): `checkout_jwt`, `checkout_hash` | the merchant-created PayPal order AgentGuard read and verified | Shape exact; `checkout_jwt` is an **unsecured JWT (`alg: none`)** of PayPal's order, not a merchant-signed JWS |
+| Payment Mandate | `payment_mandate` (`mandate.payment.1`): `transaction_id` = `checkout_hash`, `payee`, `payment_amount` (minor units), `payment_instrument` | decision + PayPal authorization | Exact. Instrument is `PAYPAL_WALLET`; the vault token is never included |
+| Receipts | `checkout_receipt`, `payment_receipt` (`reference` = hash of the closed mandate, `psp_confirmation_id` = PayPal capture id) | capture | `network_confirmation_id` holds the PayPal authorization id (PayPal is PSP and network) |
+
+Hashes follow AP2: `checkout_hash` = base64url(sha256(checkout_jwt)); `payment.reference.conditional_transaction_id` = base64url(sha256(canonical(open checkout mandate))). Every AP2 object also carries `agentguard_mandate_hash`, which pins it to the mandate the user's passkey signed.
+
+`intent-verify` checks the AP2 views automatically: they must **recompute exactly** from the signed receipt (`ap2.derivation`), and the chain must hold (open payment mandate → open checkout mandate, checkout hash → PayPal order, payment mandate → checkout, amount within `amount_range`, payee allowed, receipts → capture). An edited view fails even if the attacker re-signs the whole receipt with their own key (`test/ap2.test.ts`). `intent-verify ap2 receipt.json` prints the AP2 block.
+
+**What is approximated, honestly:**
+- **No SD-JWT.** AP2 mandates are SD-JWT VCs with key-binding JWTs and selective disclosure. These are plain JSON claim sets, authenticated by AgentGuard's Ed25519 issuer signature on the receipt.
+- **User signature format differs.** The user signs with a WebAuthn passkey over sha256(canonical(AgentGuard mandate)) (`ap2.user_authorization`), not over the AP2 open mandates. The open mandates are deterministically derived from that signed mandate, and the verifier re-derives them, so the authority is the same but the bytes the user signed are AgentGuard's.
+- **Merchant authenticity comes from PayPal's API**, not a merchant JWS: AgentGuard fetches the merchant-created order from PayPal (`GET /v2/checkout/orders/{id}`), and `--paypal` re-checks it with the merchant's own keys.
+- `cnf` is `{ kid: "agentguard-agent:<agent_id>" }`, not an agent JWK. AgentGuard does not speak AP2's A2A/MCP message flows; it emits AP2-shaped evidence for a PayPal checkout.
+
+The point: AP2 defines *how to express* verifiable intent; AgentGuard *enforces* it before PayPal moves money and hands the merchant a receipt they can use in a dispute.
+
 ## Why
 Agentic commerce gives agents a live payment capability. Detection of prompt injection is probabilistic; money movement must not be. AgentGuard separates *proposing* a payment from *having the authority to execute it*:
 

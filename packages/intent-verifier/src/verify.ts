@@ -2,6 +2,7 @@ import { createHash, createPublicKey, verify as edVerify } from "node:crypto";
 import { canonical, sha256, sha256Bytes, toMinor } from "./canonical.ts";
 import { verifyCose } from "./cose.ts";
 import { orderFacts, substance, type Facts } from "./order.ts";
+import { verifyAp2 } from "./ap2.ts";
 
 export const SUPPORTED_SCHEMAS = ["agentguard.proof-of-intent/v1"];
 
@@ -165,6 +166,9 @@ export async function verifyReceipt(env: Envelope, opts: VerifyOptions = {}): Pr
   }
   add("payment.capture", typeof r.payment?.capture_id === "string" && r.payment.capture_status === "COMPLETED", `capture ${r.payment?.capture_id} ${r.payment?.capture_status}`);
   add("audit.anchor", /^[0-9a-f]{64}$/.test(r.audit?.capture_entry_hash ?? ""), `audit entry #${r.audit?.capture_entry_seq} ${String(r.audit?.capture_entry_hash).slice(0, 16)}…`);
+
+  // 4b. AP2 views (if present): recomputed exactly and chain-linked to this receipt.
+  if (r.ap2) checks.push(...verifyAp2(r)); else warnings.push("receipt has no AP2 views (issued before AP2 compatibility).");
 
   // 5. Optional: ask PayPal, with the merchant's own keys, whether the order and capture are what the receipt says.
   if (opts.paypal && f) checks.push(...await paypalRecheck(r, f, opts.paypal));

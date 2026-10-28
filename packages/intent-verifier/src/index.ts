@@ -5,3 +5,4 @@ export type { DisputeEvidence } from "./evidence.ts";
 export { orderFacts } from "./order.ts";
 export { canonical } from "./canonical.ts";
 export { coseToKey } from "./cose.ts";
+export { buildAp2, verifyAp2, ap2Hash, AP2_PROFILE, AP2_SPEC_REF, AP2_CAVEATS } from "./ap2.ts";
