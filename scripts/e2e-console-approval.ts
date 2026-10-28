@@ -31,7 +31,7 @@ try {
     credentialId: Buffer.from(dev.credId, "base64url").toString("base64"), isResidentCredential: false, rpId: dev.rpID,
     privateKey: createPrivateKey(dev.pem).export({ type: "pkcs8", format: "der" }).toString("base64"), signCount: dev.counter } });
   const dialogs: string[] = [];
-  page.on("dialog", d => { dialogs.push(d.type() + ": " + d.message().split("\n")[0]); d.accept(); });
+  page.on("dialog", d => { dialogs.push(d.type() + ": " + d.message().split("\n")[0]); void d.accept(); });
   await page.goto(BASE + "/");
   await page.fill("#token", TOKEN); await page.click("#connect");
   await page.fill("#user", USER); await page.dispatchEvent("#user", "change");

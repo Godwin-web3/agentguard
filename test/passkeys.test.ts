@@ -1,3 +1,4 @@
+import { testSql } from "./support/db.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -21,11 +22,11 @@ const rail = (): PaymentRail & { calls: string[] } => {
     async void() { calls.push("void"); }, async getAuthorization() { return { status: "CREATED" }; } };
 };
 async function setup() {
-  const store = new Store(":memory:"); const r = rail();
+  const store = new Store(await testSql()); const r = rail();
   const { passkeys, auths } = await enrol(store, ["u1", "u2"]);
   const gw = new Gateway({ store, passkeys, risk: new HeuristicRiskAnalyzer(), rail: r });
-  gw.linkWallet("u1", "V"); gw.registerAgent("u1", "shopper");
-  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one book", constraints: { currency: "USD", max_total: "50.00", max_transactions: 3 } });
+  await gw.linkWallet("u1", "V"); await gw.registerAgent("u1", "shopper");
+  const d = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one book", constraints: { currency: "USD", max_total: "50.00", max_transactions: 3 } });
   return { store, rail: r, gw, passkeys, auths, mid: d.mandate.mandate_id, hash: d.mandate_hash, u1: auths.get("u1")!, u2: auths.get("u2")! };
 }
 const book = (mid: string, k = "k1") => ({ mandate_id: mid, agent_id: "shopper", idempotency_key: k, currency: "USD",
@@ -52,8 +53,8 @@ test("every proposal re-verifies the user's signature: a signature lifted from a
   const { gw, store, mid, hash, u1, rail } = await setup();
   await gw.confirmMandate(mid, hash, u1.assert(mandateChallenge(hash)) as any);
   // A second, bigger mandate drafted by whoever holds the admin token, given the first one's valid signature.
-  const big = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy anything", constraints: { currency: "USD", max_total: "5000.00", max_transactions: 50 } });
-  store.db.prepare("UPDATE mandates SET status='active', user_signature=(SELECT user_signature FROM mandates WHERE mandate_id=?) WHERE mandate_id=?").run(mid, big.mandate.mandate_id);
+  const big = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy anything", constraints: { currency: "USD", max_total: "5000.00", max_transactions: 50 } });
+  await store.db.prepare("UPDATE mandates SET status='active', user_signature=(SELECT user_signature FROM mandates WHERE mandate_id=?) WHERE mandate_id=?").run(mid, big.mandate.mandate_id);
   const r = await gw.propose("shopper", book(big.mandate.mandate_id));
   assert.equal(r.decision, "reject");
   assert.ok(r.evaluation.checks.some(c => c.check === "mandate_signature" && !c.pass));
@@ -65,8 +66,8 @@ test("every proposal re-verifies the user's signature: a signature lifted from a
 test("swapping the stored passkey public key (DB tamper) invalidates every mandate it signed", async () => {
   const { gw, store, mid, hash, u1 } = await setup();
   await gw.confirmMandate(mid, hash, u1.assert(mandateChallenge(hash)) as any);
-  const other = store.db.prepare("SELECT public_key FROM passkeys WHERE user_id='u2'").get() as any;
-  store.db.prepare("UPDATE passkeys SET public_key=? WHERE user_id='u1'").run(other.public_key);
+  const other = await store.db.prepare("SELECT public_key FROM passkeys WHERE user_id='u2'").get() as any;
+  await store.db.prepare("UPDATE passkeys SET public_key=? WHERE user_id='u1'").run(other.public_key);
   const r = await gw.propose("shopper", book(mid));
   assert.equal(r.decision, "reject");
 });
@@ -94,15 +95,15 @@ test("drafts can be discarded without a signature (they carry no authority)", as
 });
 
 test("no trust-on-first-use: registration without a valid enrollment token is refused", async () => {
-  const store = new Store(":memory:"); const pk = new PasskeyService(store, RP);
+  const store = new Store(await testSql()); const pk = new PasskeyService(store, RP);
   await assert.rejects(pk.registrationOptions("u1"), /invalid enrollment token/);
   await assert.rejects(pk.registrationOptions(""), /invalid enrollment token/);
 });
 
 test("registration challenge is single-use and bound to the user", async () => {
-  const store = new Store(":memory:"); const pk = new PasskeyService(store, RP);
+  const store = new Store(await testSql()); const pk = new PasskeyService(store, RP);
   const a = new SoftAuthenticator();
-  const ta = pk.issueEnrollment("alice"), tb = pk.issueEnrollment("bob");
+  const ta = await pk.issueEnrollment("alice"), tb = await pk.issueEnrollment("bob");
   const opts = await pk.registrationOptions(ta.token);
   await assert.rejects(pk.verifyRegistration(tb.token, a.register(opts) as any), /no pending/);
   const done = await pk.verifyRegistration(ta.token, a.register(opts) as any);
@@ -122,11 +123,11 @@ test("migration: server-signed legacy mandates become 'unsigned', are not enforc
   db.prepare("INSERT INTO mandates VALUES (?,?,?,?,?,?,?,?,?)").run(m.mandate_id, "u1", "shopper", canonical(m), h, "c2VydmVyLXNpZw==", "active", m.created_at, m.created_at);
   db.close();
   const store = new Store(path);
-  assert.equal(store.getMandate("mdt_legacy")!.status, "unsigned");
-  assert.ok(store.auditLog(10).some(e => e.event === "mandate.migrated_unsigned"));
+  assert.equal((await store.getMandate("mdt_legacy"))!.status, "unsigned");
+  assert.ok((await store.auditLog(10)).some(e => e.event === "mandate.migrated_unsigned"));
   const { passkeys, auths } = await enrol(store);
   const r = rail(); const gw = new Gateway({ store, passkeys, risk: new HeuristicRiskAnalyzer(), rail: r });
-  gw.linkWallet("u1", "V"); gw.registerAgent("u1", "shopper");
+  await gw.linkWallet("u1", "V"); await gw.registerAgent("u1", "shopper");
   const denied = await gw.propose("shopper", book("mdt_legacy"));
   assert.equal(denied.decision, "reject"); assert.equal(r.calls.length, 0);
   await gw.confirmMandate("mdt_legacy", h, auths.get("u1")!.assert(mandateChallenge(h)) as any);

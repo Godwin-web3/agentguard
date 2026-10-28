@@ -1,3 +1,4 @@
+import { testSql } from "./support/db.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/store.ts";
@@ -36,12 +37,12 @@ class FakeRail implements PaymentRail {
 }
 
 async function setup() {
-  const store = new Store(":memory:"); const rail = new FakeRail();
+  const store = new Store(await testSql()); const rail = new FakeRail();
   const { passkeys, auths } = await enrol(store);
   const gw = new Gateway({ store, passkeys, risk: new HeuristicRiskAnalyzer(), rail });
-  gw.linkWallet("u1", "VAULT-123");
-  gw.registerAgent("u1", "shopper");
-  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one laptop under $900",
+  await gw.linkWallet("u1", "VAULT-123");
+  await gw.registerAgent("u1", "shopper");
+  const d = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one laptop under $900",
     constraints: { currency: "USD", max_total: "900.00", max_transactions: 1, payee_allowlist: ["LAPTOPSTORE1"] } });
   const sign = signer(gw, auths);
   await sign(d.mandate.mandate_id, d.mandate_hash);
@@ -96,18 +97,30 @@ test("replay with same idempotency key returns original; different params is ref
 
 test("concurrent proposals cannot jointly exceed budget", async () => {
   const { gw, store, sign } = await setup();
-  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "laptop accessories", constraints: { currency: "USD", max_total: "100.00", max_transactions: 10 } });
+  const d = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "laptop accessories", constraints: { currency: "USD", max_total: "100.00", max_transactions: 10 } });
   await sign(d.mandate.mandate_id, d.mandate_hash);
   const rs = await Promise.all([1, 2, 3, 4].map(n => gw.propose("shopper", laptop(d.mandate.mandate_id, { idempotency_key: `c${n}`,
     items: [{ name: "laptop accessories", quantity: 1, unit_amount: "40.00", category: "PHYSICAL_GOODS" }] }))));
   assert.equal(rs.filter(r => r.status === "captured").length, 2);
-  assert.ok(store.spendState(d.mandate.mandate_id).spent_minor <= 10000);
+  assert.ok((await store.spendState(d.mandate.mandate_id)).spent_minor <= 10000);
+});
+
+test("concurrent retries with one idempotency key create exactly one payment; audit chain stays intact", async () => {
+  const { gw, store, rail, sign } = await setup();
+  const d = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "laptop accessories", constraints: { currency: "USD", max_total: "100.00", max_transactions: 10 } });
+  await sign(d.mandate.mandate_id, d.mandate_hash);
+  const p = laptop(d.mandate.mandate_id, { idempotency_key: "same", items: [{ name: "laptop accessories", quantity: 1, unit_amount: "40.00", category: "PHYSICAL_GOODS" }] });
+  const rs = await Promise.all(Array.from({ length: 6 }, () => gw.propose("shopper", p)));
+  assert.equal(new Set(rs.map(r => r.payment_id)).size, 1);
+  assert.equal(rail.calls.filter(c => c.startsWith("authorize:")).length, 1);
+  assert.equal((await store.spendState(d.mandate.mandate_id)).spent_minor, 4000);
+  assert.equal((await store.verifyAuditChain()).ok, true);
 });
 
 test("tampered mandate fails signature check", async () => {
   const { gw, store, mid, sign } = await setup();
-  const sm = store.getMandate(mid)!; sm.mandate.constraints.max_total = "99999.00";
-  store.db.prepare("UPDATE mandates SET body=? WHERE mandate_id=?").run(JSON.stringify(sm.mandate), mid);
+  const sm = (await store.getMandate(mid))!; sm.mandate.constraints.max_total = "99999.00";
+  await store.db.prepare("UPDATE mandates SET body=? WHERE mandate_id=?").run(JSON.stringify(sm.mandate), mid);
   const r = await gw.propose("shopper", laptop(mid, { idempotency_key: "t1" }));
   assert.equal(r.decision, "reject"); assert.ok(r.evaluation.checks.some(c => c.check === "mandate_signature" && !c.pass));
 });
@@ -115,7 +128,7 @@ test("tampered mandate fails signature check", async () => {
 test("agent impersonation and unconfirmed mandates are refused", async () => {
   const { gw, mid, sign } = await setup();
   await assert.rejects(gw.propose("other-agent", laptop(mid)), /does not match authenticated agent/);
-  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "laptop", constraints: { currency: "USD", max_total: "900.00", max_transactions: 1 } });
+  const d = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "laptop", constraints: { currency: "USD", max_total: "900.00", max_transactions: 1 } });
   const r = await gw.propose("shopper", laptop(d.mandate.mandate_id));
   assert.equal(r.decision, "reject");
   await assert.rejects(gw.confirmMandate(d.mandate.mandate_id, "0".repeat(64), {} as any), /does not match/);
@@ -140,26 +153,26 @@ test("revocation blocks pending approvals", async () => {
 test("audit log is hash-chained and append-only", async () => {
   const { gw, store, mid, sign } = await setup();
   await gw.propose("shopper", laptop(mid));
-  assert.equal(store.verifyAuditChain().ok, true);
-  assert.throws(() => store.db.exec("UPDATE audit SET payload='{}' WHERE seq=1"), /append-only/);
-  assert.throws(() => store.db.exec("DELETE FROM audit"), /append-only/);
+  assert.equal((await store.verifyAuditChain()).ok, true);
+  await assert.rejects(async () => await store.db.exec("UPDATE audit SET payload='{}' WHERE seq=1"), /append-only/);
+  await assert.rejects(async () => await store.db.exec("DELETE FROM audit"), /append-only/);
 });
 
 test("API keys authenticate agents", async () => {
   const { gw, sign } = await setup();
-  const k = gw.registerAgent("u1", "agent2");
-  assert.equal(gw.authenticateAgent(k.api_key)?.agent_id, "agent2");
-  assert.equal(gw.authenticateAgent("ag_wrong"), null);
+  const k = await gw.registerAgent("u1", "agent2");
+  assert.equal((await gw.authenticateAgent(k.api_key))?.agent_id, "agent2");
+  assert.equal(await gw.authenticateAgent("ag_wrong"), null);
 });
 
 test("reconcile treats PayPal 404 as voided and leaves transient errors for retry", async () => {
   const { store, rail, gw, sign } = await setup();
-  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one laptop",
+  const d = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one laptop",
     constraints: { currency: "USD", max_total: "5000.00", max_transactions: 10, payee_allowlist: ["LAPTOPSTORE1"] } });
   await sign(d.mandate.mandate_id, d.mandate_hash);
   const r = await gw.propose("shopper", laptop(d.mandate.mandate_id));
-  store.transition(r.payment_id, ["captured"], "authorized");
-  store.db.prepare("UPDATE payments SET updated_at=? WHERE payment_id=?").run(new Date(Date.now() - 120_000).toISOString(), r.payment_id);
+  await store.transition(r.payment_id, ["captured"], "authorized");
+  await store.db.prepare("UPDATE payments SET updated_at=? WHERE payment_id=?").run(new Date(Date.now() - 120_000).toISOString(), r.payment_id);
   // Simulate PayPal returning 404 for the authorization.
   const orig = rail.getAuthorization.bind(rail);
   rail.getAuthorization = async (id: string) => {
@@ -169,23 +182,23 @@ test("reconcile treats PayPal 404 as voided and leaves transient errors for retr
   };
   const rec = await gw.reconcile(60_000);
   assert.ok(rec.actions.some(a => a.includes("voided_not_found")));
-  assert.equal(gw.view(r.payment_id).status, "voided");
+  assert.equal((await gw.view(r.payment_id)).status, "voided");
   rail.getAuthorization = orig;
 });
 
 test("reconcile finishes a payment left in authorized", async () => {
   const { store, rail, gw, sign } = await setup();
   // Mandate with room so the first capture does not exhaust it, and a purpose that matches the item.
-  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one laptop",
+  const d = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one laptop",
     constraints: { currency: "USD", max_total: "5000.00", max_transactions: 10, payee_allowlist: ["LAPTOPSTORE1"] } });
   await sign(d.mandate.mandate_id, d.mandate_hash);
   const r = await gw.propose("shopper", laptop(d.mandate.mandate_id));
   assert.equal(r.status, "captured");
   // Force it back to authorized as if we crashed after authorize but before capture.
-  store.transition(r.payment_id, ["captured"], "authorized");
-  store.db.prepare("UPDATE payments SET updated_at=? WHERE payment_id=?").run(new Date(Date.now() - 120_000).toISOString(), r.payment_id);
+  await store.transition(r.payment_id, ["captured"], "authorized");
+  await store.db.prepare("UPDATE payments SET updated_at=? WHERE payment_id=?").run(new Date(Date.now() - 120_000).toISOString(), r.payment_id);
   rail.authStates.set(`A-${r.payment_id}`, { status: "CREATED", amountMinor: 85000, currency: "USD" });
   const rec = await gw.reconcile(60_000);
   assert.ok(rec.actions.some(a => a.includes("captured")));
-  assert.equal(gw.view(r.payment_id).status, "captured");
+  assert.equal((await gw.view(r.payment_id)).status, "captured");
 });

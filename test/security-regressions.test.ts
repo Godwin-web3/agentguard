@@ -1,3 +1,4 @@
+import { testSql } from "./support/db.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/store.ts";
@@ -25,11 +26,11 @@ class Rail implements PaymentRail {
 }
 
 async function setup(allow: string[] = ["store@legit.com"]) {
-  const store = new Store(":memory:"); const rail = new Rail();
+  const store = new Store(await testSql()); const rail = new Rail();
   const { passkeys, auths } = await enrol(store);
   const gw = new Gateway({ store, passkeys, risk: new HeuristicRiskAnalyzer(), rail });
-  gw.linkWallet("u1", "V"); gw.registerAgent("u1", "shopper");
-  const d = gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one laptop",
+  await gw.linkWallet("u1", "V"); await gw.registerAgent("u1", "shopper");
+  const d = await gw.draftMandate({ user_id: "u1", agent_id: "shopper", purpose: "Buy one laptop",
     constraints: { currency: "USD", max_total: "900.00", max_transactions: 1, payee_allowlist: allow } });
   const sign = signer(gw, auths);
   await sign(d.mandate.mandate_id, d.mandate_hash);
@@ -76,10 +77,10 @@ test("verifyObserved: merchant_id must match exactly; conflicting email also fai
 
 test("if recovery marks the payment failed mid-authorize, execute voids and never captures", async () => {
   const { gw, rail, store, mid, sign } = await setup();
-  rail.onAuthorize = (i) => { store.transition(i.referenceId, ["reserved"], "failed", { error: "recovery: never authorized" }); };
+  rail.onAuthorize = async (i) => { await store.transition(i.referenceId, ["reserved"], "failed", { error: "recovery: never authorized" }); };
   const r = await gw.propose("shopper", prop(mid, { email_address: "store@legit.com" }));
   assert.equal(r.status, "failed");                       // recovery's verdict stands; budget hold stays released
   assert.ok(rail.calls.some(c => c.startsWith("void:")));
   assert.ok(!rail.calls.some(c => c.startsWith("capture")));
-  assert.equal(store.spendState(mid).spent_minor, 0);
+  assert.equal((await store.spendState(mid)).spent_minor, 0);
 });

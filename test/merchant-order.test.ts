@@ -55,7 +55,7 @@ test("order changed by the merchant after evaluation is never authorized", async
   const done = await approver(gw, auths, r.approval_id!, true, "owner");
   assert.equal(done.status, "failed"); assert.match(done.error!, /changed after evaluation/);
   assert.ok(!rail.calls.some(c => c.startsWith("authorizeOrder")));
-  assert.equal(store.spendState(mid).reserved_minor, 0);
+  assert.equal((await store.spendState(mid)).reserved_minor, 0);
 });
 
 test("an order id can fund only one payment", async () => {

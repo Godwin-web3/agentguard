@@ -14,7 +14,7 @@ async function captured(c: any = {}) {
   ctx.rail.orders.set("ORDERAP2001", order("ORDERAP2001", [STAND], { tax: 300 }));
   const r = await ctx.gw.propose("shopper", pay(ctx.mid, "ORDERAP2001"));
   assert.equal(r.status, "captured");
-  return { ...ctx, env: ctx.receipts.forPayment(r.payment_id)! as any };
+  return { ...ctx, env: (await ctx.receipts.forPayment(r.payment_id))! as any };
 }
 
 test("receipt carries AP2 Intent/Cart/Payment mandates that chain correctly and verify", async () => {
