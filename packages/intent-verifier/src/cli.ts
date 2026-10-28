@@ -18,6 +18,10 @@ Options:
   --payee <id>              your PayPal merchant id or email; the order must pay it (repeatable)
   --paypal                  also re-fetch the order/capture from PayPal using PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET
                             (PAYPAL_API_BASE defaults to https://api-m.paypal.com; use https://api-m.sandbox.paypal.com for sandbox)
+  --tsa-root <name=pem>     trust this RFC 3161 TSA root instead of the bundled FreeTSA/Sectigo roots (repeatable)
+  --require-timestamp       fail unless the receipt carries a verified RFC 3161 timestamp
+  --require-anchor          fail unless the receipt carries a timestamped audit-anchor inclusion proof
+  --max-anchor-lag <min>    maximum minutes between receipt and the anchor that covers it (default 1440)
   --json                    machine-readable output
 Exit code: 0 all checks pass, 1 a check failed, 2 usage/input error.`;
 
@@ -46,6 +50,11 @@ async function main(argv: string[]) {
   if (origins.length) opts.expectedOrigins = origins;
   if (payees.length) opts.expectedPayee = payees;
   if (live || submit) opts.paypal = creds();
+  const roots = many("--tsa-root");
+  if (roots.length) opts.tsaRoots = Object.fromEntries(roots.map(r => { const i = r.indexOf("="); return [r.slice(0, i), readFileSync(r.slice(i + 1), "utf8")]; }));
+  if (flag("--require-timestamp")) opts.requireTimestamp = true;
+  if (flag("--require-anchor")) opts.requireAnchor = true;
+  const lag = one("--max-anchor-lag"); if (lag) opts.maxAnchorLagMs = Number(lag) * 60_000;
   const v = await verifyReceipt(env, opts);
   if (json && !evidence) console.log(JSON.stringify(v, null, 2));
   else {

@@ -103,11 +103,15 @@ npm test       # threat-model test suite
 ### User passkeys (what is and isn't enforced)
 - One passkey per user. User verification (PIN/biometric) is required.
 - **Enrollment tokens, not trust-on-first-use.** The admin issues a single-use link bound to one user (`POST /v1/users/:id/enrollments` → `{token, link: /console#enroll=…, expires_at}`, 15-min default). Only its sha256 is stored. The user redeems it (`POST /v1/enroll/options {token}`, `POST /v1/enroll {token, response}`). Reused, expired, or other-user tokens are refused.
-- **Replacing a passkey** works only with the current passkey (`POST /v1/users/:id/reenroll-request` → assert → `POST /v1/users/:id/reenroll` mints a token) or a fresh admin link that names the credential it replaces. Both are written to the audit log (`passkey.replaced`) and to receipts (`mandate.passkey.enrollment`). Mandates signed by the old passkey stop working until they are re-signed.
+- **Replacing a passkey, without admin takeover.** Two paths only:
+  1. *Current passkey* (`POST /v1/users/:id/reenroll-request` → assert → `POST /v1/users/:id/reenroll` mints a single-use token; `scripts/dev-passkey.ts reenroll <user>`). Immediate; recorded as `via: passkey` and checked by the verifier as `passkey.provenance`.
+  2. *Time-locked recovery* (lost passkey). An admin link that names the credential it replaces only **starts** a recovery: the new key is registered but cannot sign anything for `AGENTGUARD_RECOVERY_LOCK_MS` (default 72h). The user is notified (`AGENTGUARD_NOTIFY_WEBHOOK`), and the *current* passkey can cancel at any time (`POST /v1/users/:id/recovery/cancel-request` → assert → `.../recovery/cancel`; `dev-passkey.ts cancel-recovery <user>`). `GET /v1/users/:id/recovery` shows the state.
+  
+  In both cases mandates signed by the old key are **frozen** until the new key re-signs them. Recovery is in the audit log (`passkey.recovery_*`), on every later receipt (`mandate.passkey.enrollment.via = recovery`), and the verifier warns `RECOVERY: …` (`passkey.recovery_lock` fails if a recovered key was used before its lock expired).
 - Confirming a mandate needs a WebAuthn assertion whose challenge is the base64url SHA-256 of the canonical mandate. The assertion is stored and **re-verified on every proposal** (statelessly: origin, RP ID, UP+UV flags, signature over the stored public key), so editing the mandate row, its hash, the signature, or swapping the stored public key all stop spending.
 - Revocation needs a separate assertion over `sha256("agentguard:revoke:v1:" + mandate_hash)`, so a signing assertion can't be replayed as a revocation. Unsigned drafts can be discarded without one.
 - Mandates created before this change are migrated to `unsigned` and are not usable until the user re-signs them.
-- Honest limits: the admin token can still issue an enrollment link, and so can replace a user's passkey. That replacement is logged and shown on every later receipt, but it is not prevented. In production, deliver links over your own authenticated channel (email/SSO). There is no operator kill-switch that bypasses the user's passkey; an operator can still let held payments expire unapproved. `scripts/dev-passkey.ts` is a software passkey for scripts and CI only.
+- Honest limits: **first** enrollment is still admin-bootstrapped (whoever holds the admin token decides who gets the first link). An admin who holds the token *and* suppresses the notification webhook *and* outlasts the 72h lock while the user never opens the console can still take over; the receipt and verifier then say `RECOVERY`, so it is visible, not prevented. The notifier only works if the operator configures it. In production, deliver links over your own authenticated channel (email/SSO). There is no operator kill-switch that bypasses the user's passkey; an operator can still let held payments expire unapproved. `scripts/dev-passkey.ts` is a software passkey for scripts and CI only.
 - `GET /v1/audit/attestation` returns the audit chain head signed with the active issuer key (with `kid`).
 
 ### Issuer key rotation
@@ -119,6 +123,12 @@ curl -X POST -H "Authorization: Bearer $AGENTGUARD_ADMIN_TOKEN" http://localhost
 curl http://localhost:8787/.well-known/agentguard-keys > agentguard-keys.json                          # pin this
 ```
 Retired keys stay published, so old receipts keep verifying. A receipt that claims a retired key but was issued after its `retired_at` is rejected.
+
+### Key compromise, RFC 3161 timestamps and external anchoring
+- Key states: `active` → `retired` → `compromised` (`POST /v1/keys/:kid/compromised {at}`, admin, audited; rotates first if the key is active). The key set publishes `status` and `compromised_at`.
+- Every receipt is stamped by an independent RFC 3161 TSA (FreeTSA, then Sectigo; `AGENTGUARD_TSA_URLS`) over `sha256(canonical(receipt))`. The verifier checks the token offline against bundled TSA roots (`--tsa-root` to override). **For a compromised key, a receipt passes only if a verified TSA genTime and its `issued_at` are both before `compromised_at`**; with no TSA proof it fails, because anyone holding the stolen key can back-date `issued_at`.
+- The audit chain head is anchored every `AGENTGUARD_ANCHOR_INTERVAL_MS` (default 15 min; `POST /v1/audit/anchor`, `GET /v1/audit/anchors`): an RFC 6962 Merkle root of all audit hashes, TSA-stamped. Each receipt carries an inclusion proof of its spend entries into the earliest anchor that covers them, plus **all prior spend entries of its mandate**, so the verifier recomputes cumulative spend and transaction count against the signed limits (`spend.*`, `anchor.*`). `--require-timestamp` / `--require-anchor` make those mandatory.
+- Honest limits: TSA genTime precision is about 1 s, so a compromise declared within the same second as a receipt is treated as fail-closed (the verifier requires genTime + 1 s ≤ `compromised_at`). An anchor proves history only **as of its time**; detecting a fork (two different histories shown to two verifiers) needs someone outside to keep copies of `/v1/audit/anchors`. The issuer can fabricate history before the first anchor. Captures made before spend-chaining are summarized as `unchained_prior` and attested by the issuer only. A receipt issued while every TSA is down has no timestamp until `stampPending` retries; anchoring then lags.
 
 ### Recovery
 The process is safe to restart. On startup and every 5 minutes (override with `AGENTGUARD_RECOVER_INTERVAL_MS`) AgentGuard scans for payments still in `reserved` or `authorized` older than 60 seconds and converges them with PayPal:
@@ -152,7 +162,7 @@ by the model. See `test/drafter.test.ts` for a model that tries to raise a $900 
 ### Verified against PayPal sandbox
 `scripts/sandbox-smoke.sh` runs the live path end to end: register agent → link vaulted wallet → plain-English mandate → sign →
 in-policy payment (AUTHORIZE → verify → capture), off-allowlist payee (rejected, PayPal never called), over-threshold payment
-(held for approval, captured after approval), prompt-injected context (held), admin-only confirm and revoke (refused), and a passkey-signed revoke. `scripts/e2e-console-passkey.ts` drives the console's real `navigator.credentials` path in Chrome with a virtual authenticator. Note: the sandbox merchant must be in a country
+(held for approval, captured after approval), prompt-injected context (held), admin-only confirm and revoke (refused), and a passkey-signed revoke. `scripts/e2e-console-approval.ts` clicks Approve on a held payment in the console headlessly (the dev passkey is loaded into a CDP virtual authenticator; `scripts/sandbox-held-approval.sh` uses it by default). `scripts/e2e-console-passkey.ts` drives the console's real `navigator.credentials` path in Chrome with a virtual authenticator. Note: the sandbox merchant must be in a country
 that can receive PayPal payments (e.g. US); Nigerian business accounts cannot.
 
 ### MCP

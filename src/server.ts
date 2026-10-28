@@ -4,7 +4,9 @@ import { Store } from "./store.ts";
 import { KeyRing } from "./keys.ts";
 import { ReceiptService, keyId } from "./receipt.ts";
 import { Gateway, GatewayError } from "./gateway.ts";
-import { PasskeyService } from "./passkeys.ts";
+import { PasskeyService, webhookNotifier } from "./passkeys.ts";
+import { TsaClient } from "./timestamp.ts";
+import { AnchorService } from "./anchor.ts";
 import { HeuristicRiskAnalyzer, LLMRiskAnalyzer, CompositeRiskAnalyzer, type RiskAnalyzer } from "./risk.ts";
 import { PayPalClient, lazyPayPalRail, type PaymentRail } from "./paypal.ts";
 import { draftFromText, summarize, type LLMConfig } from "./drafter.ts";
@@ -35,8 +37,24 @@ store.db.exec("CREATE TABLE IF NOT EXISTS wallet_setups (state TEXT PRIMARY KEY,
 // The server key signs audit-log attestations only. Mandates and revocations are signed by the user's passkey.
 const signer = KeyRing.load();
 const RP_ID = process.env.AGENTGUARD_RP_ID ?? new URL(PUBLIC_URL).hostname;
-const passkeys = new PasskeyService(store, { rpID: RP_ID, rpName: process.env.AGENTGUARD_RP_NAME ?? "AgentGuard", origin: new URL(PUBLIC_URL).origin });
-const receipts = new ReceiptService({ store, signer, passkeys, issuer: process.env.AGENTGUARD_ISSUER_NAME ?? new URL(PUBLIC_URL).host });
+// Admin-started passkey recovery is time-locked and announced to the user out of band (webhook; point it at an email relay).
+const passkeys = new PasskeyService(store, { rpID: RP_ID, rpName: process.env.AGENTGUARD_RP_NAME ?? "AgentGuard", origin: new URL(PUBLIC_URL).origin,
+  recoveryLockMs: process.env.AGENTGUARD_RECOVERY_LOCK_MS ? Number(process.env.AGENTGUARD_RECOVERY_LOCK_MS) : undefined,
+  notify: webhookNotifier(process.env.AGENTGUARD_NOTIFY_WEBHOOK) });
+const ISSUER = process.env.AGENTGUARD_ISSUER_NAME ?? new URL(PUBLIC_URL).host;
+// External time: RFC 3161 TSAs stamp every receipt and periodically the audit-chain head (AGENTGUARD_TSA_URLS="" disables).
+const tsa = new TsaClient();
+const anchors = new AnchorService({ store, tsa, issuer: ISSUER });
+const receipts = new ReceiptService({ store, signer, passkeys, issuer: ISSUER, tsa, anchors });
+const ANCHOR_INTERVAL_MS = Number(process.env.AGENTGUARD_ANCHOR_INTERVAL_MS ?? 15 * 60_000);
+let anchoring = false;
+async function runAnchor() {
+  if (anchoring) return null; anchoring = true;
+  try { await receipts.stampPending(); return await anchors.anchor(); }
+  catch (e) { store.audit("audit.anchor_failed", null, { error: (e as Error).message.slice(0, 300) }); return null; }
+  finally { anchoring = false; }
+}
+if (ANCHOR_INTERVAL_MS > 0 && tsa.enabled) setInterval(runAnchor, ANCHOR_INTERVAL_MS).unref();
 const gw = new Gateway({ store, passkeys, risk, rail, receipts });
 // Receipts contain the user's mandate (purpose, limits). Unauthenticated read by receipt id is opt-in, for merchants.
 const PUBLIC_RECEIPTS = process.env.AGENTGUARD_PUBLIC_RECEIPTS === "1";
@@ -131,6 +149,11 @@ route("POST", "/v1/users/:id/enrollments", "admin", ({ params, body }) => {
   const t = passkeys.issueEnrollment(params[0], { issuedBy: body?.issued_by ?? "admin", ttlMs: body?.ttl_minutes ? Number(body.ttl_minutes) * 60_000 : undefined });
   return { ...t, link: `${PUBLIC_URL}/console#enroll=${t.token}` };
 });
+// An admin link for a user who already has a passkey starts a time-locked recovery (it cannot replace the key outright).
+route("GET", "/v1/users/:id/recovery", "admin", ({ params }) => passkeys.recoveryFor(params[0]));
+// Cancelling needs only the user's CURRENT passkey (not the admin token, which is what a hostile operator would hold).
+route("POST", "/v1/users/:id/recovery/cancel-request", "none", ({ params }) => pkCall(() => passkeys.recoveryCancelRequest(params[0])));
+route("POST", "/v1/users/:id/recovery/cancel", "none", ({ params, body }) => pkCall(() => passkeys.cancelRecovery(params[0], body?.assertion)));
 // Replacement authorized by the user's existing passkey instead of the admin.
 route("POST", "/v1/users/:id/reenroll-request", "admin", ({ params }) => pkCall(() => passkeys.reenrollRequest(params[0])));
 route("POST", "/v1/users/:id/reenroll", "admin", async ({ params, body }) => {
@@ -152,6 +175,10 @@ route("POST", "/v1/approvals/:id/request", "admin", ({ params, body }) => gw.app
 route("POST", "/v1/approvals/:id", "admin", ({ params, body }) => gw.resolveApproval(params[0], body?.approve === true, body?.assertion, String(body?.approver ?? "owner").slice(0, 100)));
 // Issuer key rotation (also: scripts/rotate-key.ts while the server is stopped). Old keys stay published.
 route("POST", "/v1/keys/rotate", "admin", () => { const r = signer.rotate(); store.audit("issuer.key_rotated", null, r); return { ...r, ...signer.jwks() }; });
+route("POST", "/v1/keys/:kid/compromised", "admin", ({ params, body }) => {
+  const r = signer.markCompromised(params[0], body?.at ? new Date(String(body.at)) : new Date());
+  store.audit("issuer.key_compromised", null, r); return { ...r, ...signer.jwks() };
+});
 route("GET", "/v1/payments", "admin", ({ query }) => store.listPayments(Number(query.get("limit") ?? 200)).map(p => ({ ...p, evaluation: JSON.parse(p.evaluation), proposal: JSON.parse(p.proposal) })));
 route("GET", "/v1/receipts", "admin", ({ query }) => receipts.list(Number(query.get("limit") ?? 100)));
 route("GET", "/v1/receipts/:id", "admin", ({ params }) => {
@@ -175,6 +202,9 @@ route("POST", "/v1/control/pause", "admin", ({ body }) => gw.pause(body?.reason,
 route("POST", "/v1/control/resume", "admin", ({ body }) => gw.resume(body?.by));
 route("GET", "/v1/audit", "admin", ({ query }) => store.auditLog(Number(query.get("limit") ?? 200)));
 route("GET", "/v1/audit/verify", "admin", () => store.verifyAuditChain());
+route("POST", "/v1/audit/anchor", "admin", async () => { const a = await runAnchor(); if (!a) throw new GatewayError(502, "no TSA token obtained"); return a; });
+// Public so anyone can keep copies (fork detection needs outside copies of the anchors).
+route("GET", "/v1/audit/anchors", "none", ({ query }) => ({ issuer: ISSUER, anchors: anchors.list(Number(query.get("limit") ?? 100)) }));
 // Signed checkpoint of the audit chain head: publish or archive these to detect any later rewrite of history.
 route("GET", "/v1/audit/attestation", "admin", () => {
   const head = store.auditLog(1)[0];

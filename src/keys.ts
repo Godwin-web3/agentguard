@@ -29,10 +29,10 @@ export class Signer {
 /** Anything that signs as the issuer (a single Signer or the active key of a KeyRing). */
 export interface IssuerSigner { sign(message: string): string; publicKeyPem(): string }
 
-export interface IssuerKeyRecord { kid: string; created: string | null; retired: string | null; private_pem: string }
+export interface IssuerKeyRecord { kid: string; created: string | null; retired: string | null; compromised_at?: string | null; private_pem: string }
 /** Public view of one issuer key, JWKS-style (RFC 8037 OKP/Ed25519) plus lifecycle dates. */
 export interface IssuerJwk { kty: "OKP"; crv: "Ed25519"; x: string; kid: string; alg: "EdDSA"; use: "sig";
-  status: "active" | "retired"; created: string | null; retired: string | null; public_key_pem: string }
+  status: "active" | "retired" | "compromised"; created: string | null; retired: string | null; compromised_at: string | null; public_key_pem: string }
 
 /** kid: first 16 bytes of sha256(SPKI DER), hex (same as the receipt key_id). */
 export function kidOf(pubPem: string): string {
@@ -83,12 +83,26 @@ export class KeyRing implements IssuerSigner {
     this.recs.push(next); this.save();
     return { retired: cur.kid, active: next.kid };
   }
+  /**
+   * Declare a key compromised as of `at` (default now). If it is the active key, rotate first. Verifiers then reject
+   * anything signed by it unless an independent RFC 3161 timestamp proves the receipt existed before `at`
+   * (the attacker can backdate issued_at, but cannot backdate a TSA's genTime).
+   */
+  markCompromised(kid: string, at = new Date()): { kid: string; compromised_at: string; active: string } {
+    const rec = this.recs.find(r => r.kid === kid);
+    if (!rec) throw Object.assign(new Error(`unknown kid ${kid}`), { code: 404 });
+    if (!rec.retired) this.rotate(at);
+    const iso = at.toISOString();
+    rec.compromised_at = rec.compromised_at && rec.compromised_at < iso ? rec.compromised_at : iso;
+    this.save();
+    return { kid, compromised_at: rec.compromised_at, active: this.activeKid() };
+  }
   jwks(): { keys: IssuerJwk[] } {
     return { keys: this.recs.map(r => {
       const pub = createPublicKey(createPrivateKey(r.private_pem));
       const jwk = pub.export({ format: "jwk" }) as any;
-      return { kty: "OKP", crv: "Ed25519", x: jwk.x, kid: r.kid, alg: "EdDSA", use: "sig", status: r.retired ? "retired" : "active",
-        created: r.created, retired: r.retired, public_key_pem: pub.export({ type: "spki", format: "pem" }).toString() } as IssuerJwk;
+      return { kty: "OKP", crv: "Ed25519", x: jwk.x, kid: r.kid, alg: "EdDSA", use: "sig", status: r.compromised_at ? "compromised" : r.retired ? "retired" : "active",
+        created: r.created, retired: r.retired, compromised_at: r.compromised_at ?? null, public_key_pem: pub.export({ type: "spki", format: "pem" }).toString() } as IssuerJwk;
     }) };
   }
 }

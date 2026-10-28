@@ -17,6 +17,8 @@ export interface ProposeResult {
 
 export class GatewayError extends Error { code: number; constructor(code: number, msg: string) { super(msg); this.code = code; } }
 
+/** A frozen mandate (its signing passkey was replaced) can be re-signed by the new passkey, like a legacy unsigned one. */
+const RESIGNABLE = ["draft", "unsigned", "frozen"];
 const APPROVAL_TTL_MS = 15 * 60 * 1000;
 const APPROVAL_SIGN_TTL_MS = 5 * 60 * 1000;
 export interface ApprovalStatement { v: 1; kind: "agentguard.payment-approval"; approval_id: string; payment_id: string; mandate_id: string; user_id: string;
@@ -94,7 +96,7 @@ export class Gateway {
   /** Step 2a: what the user's authenticator must sign. The challenge IS the mandate hash. */
   async signingRequest(mandateId: string) {
     const sm = this.mustMandate(mandateId);
-    if (sm.status !== "draft" && sm.status !== "unsigned") throw new GatewayError(409, `mandate is ${sm.status}`);
+    if (!RESIGNABLE.includes(sm.status)) throw new GatewayError(409, `mandate is ${sm.status}`);
     if (sha256(canonical(sm.mandate)) !== sm.mandate_hash) throw new GatewayError(409, "mandate body does not match its hash");
     const options = await this.pk(() => this.passkeys.signingOptions(sm.mandate.user_id, mandateChallenge(sm.mandate_hash)));
     return { mandate: sm.mandate, mandate_hash: sm.mandate_hash, options };
@@ -105,12 +107,12 @@ export class Gateway {
    */
   async confirmMandate(mandateId: string, reviewedHash: string, assertion: AuthenticationResponseJSON): Promise<{ mandate_id: string; status: string; credential_id: string }> {
     const sm = this.mustMandate(mandateId);
-    if (sm.status !== "draft" && sm.status !== "unsigned") throw new GatewayError(409, `mandate is ${sm.status}`);
+    if (!RESIGNABLE.includes(sm.status)) throw new GatewayError(409, `mandate is ${sm.status}`);
     if (sha256(canonical(sm.mandate)) !== sm.mandate_hash || reviewedHash !== sm.mandate_hash) throw new GatewayError(409, "reviewed hash does not match mandate");
     if (!assertion) throw new GatewayError(400, "assertion (WebAuthn response signed by the user's passkey) is required");
     const sig = await this.pk(() => this.passkeys.verifyAssertion(sm.mandate.user_id, assertion, mandateChallenge(sm.mandate_hash)));
     if (!this.store.setMandateSigned(mandateId, sig)) throw new GatewayError(409, "mandate changed state while signing");
-    this.store.audit("mandate.activated", mandateId, { mandate_hash: sm.mandate_hash, user_signature: sig, resigned: sm.status === "unsigned" });
+    this.store.audit("mandate.activated", mandateId, { mandate_hash: sm.mandate_hash, user_signature: sig, resigned: sm.status === "unsigned" || sm.status === "frozen", prior_status: sm.status });
     return { mandate_id: mandateId, status: "active", credential_id: sig.credential_id };
   }
   async revocationRequest(mandateId: string) {
@@ -331,8 +333,8 @@ export class Gateway {
         const mandateOk = !!sm && sm.status === "active" && new Date() < new Date(sm.mandate.expires_at) && await this.signatureValid(sm);
 
         if (remote.status === "CAPTURED") {
-          this.store.transition(pay.payment_id, ["authorized"], "captured", { paypal_capture_id: remote.capture_id ?? null });
-          this.store.audit("payment.recovered_captured", pay.payment_id, { remote_status: remote.status, capture_id: remote.capture_id });
+          this.store.tx(() => { if (this.store.transition(pay.payment_id, ["authorized"], "captured", { paypal_capture_id: remote.capture_id ?? null }))
+            this.store.appendSpend("payment.recovered_captured", pay.payment_id, pay.mandate_id, pay.amount_minor, pay.currency, { remote_status: remote.status, capture_id: remote.capture_id }); });
           actions.push(`${pay.payment_id}:synced_captured`);
         } else if (remote.status === "VOIDED" || remote.status === "EXPIRED" || remote.status === "DENIED") {
           this.store.transition(pay.payment_id, ["authorized"], "voided", { error: `recovery: PayPal ${remote.status}` });
@@ -347,8 +349,8 @@ export class Gateway {
           } else {
             // Still authorized and mandate is good: finish the capture.
             const cap = await this.rail.capture(pay.paypal_authorization_id, `ag-${pay.payment_id}-cap-recover`);
-            this.store.transition(pay.payment_id, ["authorized"], "captured", { paypal_capture_id: cap.capture_id });
-            this.store.audit("payment.recovered_captured", pay.payment_id, { capture_id: cap.capture_id });
+            this.store.tx(() => { if (this.store.transition(pay.payment_id, ["authorized"], "captured", { paypal_capture_id: cap.capture_id }))
+              this.store.appendSpend("payment.recovered_captured", pay.payment_id, pay.mandate_id, pay.amount_minor, pay.currency, { capture_id: cap.capture_id }); });
             actions.push(`${pay.payment_id}:captured`);
           }
         } else {
@@ -424,14 +426,18 @@ export class Gateway {
       const invoiceId = snapshot && this.receipts ? receiptReference(receiptIdFor(paymentId)) : undefined;
       const cap = await this.rail.capture(auth.authorization_id, `ag-${paymentId}-cap`,
         invoiceId ? { invoice_id: invoiceId, note_to_payer: `Agent purchase under your signed mandate. Proof-of-Intent receipt ${invoiceId}` } : undefined);
-      if (!this.store.transition(paymentId, ["authorized"], "captured", { paypal_capture_id: cap.capture_id })) {
+      const moved = this.store.tx(() => {
+        if (!this.store.transition(paymentId, ["authorized"], "captured", { paypal_capture_id: cap.capture_id })) return false;
+        this.store.appendSpend("payment.captured", paymentId, pay.mandate_id, pay.amount_minor, pay.currency, { capture_id: cap.capture_id, status: cap.status, invoice_id: invoiceId ?? null });
+        return true;
+      });
+      if (!moved) {
         // Money moved but local state diverged: record loudly so an operator reconciles. Do not silently drop.
         this.store.audit("payment.capture_state_conflict", paymentId, { capture_id: cap.capture_id, status: this.store.getPayment(paymentId)!.status });
         return;
       }
-      this.store.audit("payment.captured", paymentId, { capture_id: cap.capture_id, status: cap.status, invoice_id: invoiceId ?? null });
       if (snapshot && this.receipts) {
-        try { this.receipts.issue({ payment_id: paymentId, order_snapshot: snapshot, authorization_id: auth.authorization_id,
+        try { await this.receipts.issueAndStamp({ payment_id: paymentId, order_snapshot: snapshot, authorization_id: auth.authorization_id,
           capture: { capture_id: cap.capture_id, status: cap.status, invoice_id: invoiceId } }); }
         catch (e) { this.store.audit("receipt.issue_failed", paymentId, { error: (e as Error).message.slice(0, 500) }); }
       }

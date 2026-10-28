@@ -7,6 +7,8 @@
  *   node --experimental-strip-types scripts/dev-passkey.ts sign <mandate_id> <user_id>
  *   node --experimental-strip-types scripts/dev-passkey.ts revoke <mandate_id> <user_id>
  *   node --experimental-strip-types scripts/dev-passkey.ts approve <approval_id> <user_id>   (or: deny)
+ *   node --experimental-strip-types scripts/dev-passkey.ts reenroll <user_id>          (rotate: the CURRENT dev passkey authorizes a new one)
+ *   node --experimental-strip-types scripts/dev-passkey.ts cancel-recovery <user_id>   (stop an admin-started recovery with the current passkey)
  * register issues a single-use enrollment token with the admin token and redeems it (or redeems ENROLL_TOKEN if set).
  * Env: AGENTGUARD_URL (default http://localhost:8787), AGENTGUARD_ADMIN_TOKEN.
  */
@@ -55,4 +57,21 @@ if (cmd === "register") {
   const v = await api("POST", `/v1/approvals/${a1}`, { approve, assertion: a.assert(r.options.challenge), approver: `${a2} (dev-passkey)` });
   save(a2, a);
   console.log(JSON.stringify({ payment_id: v.payment_id, status: v.status, paypal: v.paypal ?? null, statement_hash: r.statement_hash }));
-} else { console.error("usage: register <user> | sign <mandate> <user> | revoke <mandate> <user> | approve|deny <approval> <user>"); process.exit(2); }
+} else if (cmd === "reenroll") {
+  // Passkey-authorized rotation through a single-use enrollment token: gives the user recorded provenance
+  // (via=passkey) with no admin involvement. Mandates signed by the old key are frozen until re-signed.
+  const cur = load(a1);
+  const r = await api("POST", `/v1/users/${encodeURIComponent(a1)}/reenroll-request`);
+  const t = await api("POST", `/v1/users/${encodeURIComponent(a1)}/reenroll`, { assertion: cur.assert(r.options.challenge) });
+  save(a1, cur);
+  const next = new SoftAuthenticator(rpID, origin);
+  const o = await api("POST", `/v1/enroll/options`, { token: t.token });
+  const res = await api("POST", `/v1/enroll`, { token: t.token, response: next.register(o) });
+  writeFileSync(file(a1) + ".prev", JSON.stringify(cur.toJSON()), { mode: 0o600 }); save(a1, next);
+  console.log(JSON.stringify({ credential_id: res.credential_id, replaces: res.enrollment.replaces, via: res.enrollment.via, token_id: t.token_id }));
+} else if (cmd === "cancel-recovery") {
+  const a = load(a1);
+  const r = await api("POST", `/v1/users/${encodeURIComponent(a1)}/recovery/cancel-request`);
+  console.log(JSON.stringify(await api("POST", `/v1/users/${encodeURIComponent(a1)}/recovery/cancel`, { assertion: a.assert(r.options.challenge) })));
+  save(a1, a);
+} else { console.error("usage: register <user> | reenroll <user> | cancel-recovery <user> | sign <mandate> <user> | revoke <mandate> <user> | approve|deny <approval> <user>"); process.exit(2); }

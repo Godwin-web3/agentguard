@@ -3,12 +3,14 @@ import { canonical, sha256, sha256Bytes, toMinor } from "./canonical.ts";
 import { verifyCose } from "./cose.ts";
 import { orderFacts, substance, type Facts } from "./order.ts";
 import { verifyAp2 } from "./ap2.ts";
+import { checkReceiptTimestamps, checkCompromise, checkSpend, checkAnchor, checkRecovery } from "./trust.ts";
+import type { TimestampToken } from "./tsa.ts";
 
 export const SUPPORTED_SCHEMAS = ["agentguard.proof-of-intent/v1"];
 
-export interface Envelope { receipt: any; signature: { alg: string; key_id?: string; kid?: string; public_key_pem?: string; value: string } }
+export interface Envelope { receipt: any; signature: { alg: string; key_id?: string; kid?: string; public_key_pem?: string; value: string }; timestamps?: TimestampToken[]; anchor?: any }
 /** One entry of the issuer key set at /.well-known/agentguard-keys. */
-export interface IssuerKey { kid: string; kty?: string; crv?: string; x?: string; public_key_pem?: string; created?: string; retired?: string | null; status?: string }
+export interface IssuerKey { kid: string; kty?: string; crv?: string; x?: string; public_key_pem?: string; created?: string; retired?: string | null; status?: string; compromised_at?: string | null }
 export interface Check { check: string; pass: boolean; detail: string }
 export interface VerifyOptions {
   /** PEM of the AgentGuard issuer key you trust (from its /.well-known/agentguard-key). Without it, the embedded key is used and the result is not "trusted". */
@@ -23,6 +25,14 @@ export interface VerifyOptions {
   expectedPayee?: string[];
   /** Optional live re-check against PayPal using the merchant's own REST credentials. */
   paypal?: { clientId: string; clientSecret: string; apiBase?: string; fetch?: typeof fetch };
+  /** Trusted RFC 3161 TSA roots (PEM by name). Defaults to the pinned FreeTSA + Sectigo roots. */
+  tsaRoots?: Record<string, string>;
+  /** Max time between the receipt's TSA time and the TSA time of the anchor that proves it. Default 24h. */
+  maxAnchorLagMs?: number;
+  /** Fail (instead of warn) when the receipt has no audit anchor proof. */
+  requireAnchor?: boolean;
+  /** Fail (instead of warn) when the receipt has no RFC 3161 timestamp. */
+  requireTimestamp?: boolean;
 }
 export interface VerifyResult {
   ok: boolean;               // every check passed
@@ -63,7 +73,7 @@ export function checkOrderAgainstMandate(f: Facts, mandate: any): Check[] {
   const c = mandate.constraints ?? {};
   add("mandate.currency", f.currency === c.currency, `${f.currency} vs ${c.currency}`);
   if (c.max_per_transaction) add("mandate.per_transaction_limit", f.amount_minor <= toMinor(c.max_per_transaction), `${fmt(f.amount_minor)} <= ${c.max_per_transaction}`);
-  add("mandate.total_limit", f.amount_minor <= toMinor(c.max_total), `${fmt(f.amount_minor)} <= ${c.max_total} (this payment alone; cumulative spend is attested by the issuer)`);
+  add("mandate.total_limit", f.amount_minor <= toMinor(c.max_total), `${fmt(f.amount_minor)} <= ${c.max_total} (this payment alone; cumulative spend is recomputed under spend.*)`);
   const ids = [f.payee.merchant_id, f.payee.email_address].filter(Boolean).map(s => s!.toLowerCase());
   if (c.payee_allowlist?.length) {
     const allow = c.payee_allowlist.map((s: string) => s.toLowerCase());
@@ -122,6 +132,13 @@ export async function verifyReceipt(env: Envelope, opts: VerifyOptions = {}): Pr
   if (!r || typeof r !== "object" || !env.signature?.value) return { ok: false, trusted_issuer: false, checks: [{ check: "format", pass: false, detail: "not a receipt envelope" }], warnings };
   add("schema", SUPPORTED_SCHEMAS.includes(r.schema), `schema ${r.schema}`);
 
+  // 0. Independent time: RFC 3161 tokens over the signed receipt.
+  const { genTime: tsaTime } = checkReceiptTimestamps(r, env.timestamps, opts.tsaRoots, add);
+  if (!env.timestamps?.length) {
+    if (opts.requireTimestamp) add("receipt.timestamp", false, "receipt has no RFC 3161 timestamp");
+    else warnings.push("receipt has no RFC 3161 timestamp: its issue time is attested by the issuer only.");
+  }
+
   // 1. Issuer attestation (Ed25519 over canonical(receipt)).
   let trusted = false;
   let pem = opts.issuerPublicKeyPem ?? env.signature.public_key_pem;
@@ -132,10 +149,11 @@ export async function verifyReceipt(env: Envelope, opts: VerifyOptions = {}): Pr
     let kpem: string | undefined;
     try { kpem = k?.public_key_pem ?? (k?.x ? createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: k.x }, format: "jwk" }).export({ type: "spki", format: "pem" }).toString() : undefined); } catch { kpem = undefined; }
     const kidOk = !!k && !!kpem && keyIdOf(kpem) === kid;
-    add("issuer.kid", kidOk, !k ? `unknown kid ${kid}: not in the pinned issuer key set` : kidOk ? `kid ${kid} pinned (${k.retired ? `retired ${k.retired}` : "active"})` : `key set entry for ${kid} does not hash to its kid`);
+    add("issuer.kid", kidOk, !k ? `unknown kid ${kid}: not in the pinned issuer key set` : kidOk ? `kid ${kid} pinned (${k.compromised_at ? `COMPROMISED ${k.compromised_at}` : k.retired ? `retired ${k.retired}` : "active"})` : `key set entry for ${kid} does not hash to its kid`);
     if (k) {
       const at = new Date(r.issued_at).getTime();
       const live = !Number.isNaN(at) && (!k.created || at >= new Date(k.created).getTime()) && (!k.retired || at < new Date(k.retired).getTime());
+      checkCompromise(r, k, tsaTime, add);
       add("issuer.key_lifecycle", live, live ? `issued ${r.issued_at} while key was active` : `issued ${r.issued_at} outside key lifetime (created ${k.created ?? "?"}, retired ${k.retired ?? "never"})`);
     }
     pem = kidOk ? kpem : undefined; pinned = kidOk;
@@ -199,7 +217,9 @@ export async function verifyReceipt(env: Envelope, opts: VerifyOptions = {}): Pr
   }
   const enr = pk?.enrollment;
   if (pk && !enr) warnings.push("passkey enrollment provenance not recorded (registered before enrollment tokens).");
-  if (enr?.replaces) warnings.push(`this passkey replaced ${enr.replaces} via ${enr.via} (issued by ${enr.issued_by} at ${enr.issued_at}).`);
+  checkRecovery(r, add, warnings);
+  if (enr?.via === "passkey" && enr.replaces) add("passkey.provenance", /^passkey:/.test(enr.issued_by ?? ""), `passkey rotated by the user's previous passkey (${enr.replaces}) at ${enr.redeemed_at}`);
+  else if (enr?.replaces && enr.via !== "recovery") warnings.push(`this passkey replaced ${enr.replaces} via ${enr.via} (issued by ${enr.issued_by} at ${enr.issued_at}).`);
   if (m) {
     const t = (s: string) => new Date(s).getTime();
     const inWin = t(m.created_at) <= t(d.evaluated_at) && t(d.evaluated_at) < t(m.expires_at) && t(r.payment?.captured_at) >= t(d.evaluated_at);
@@ -207,6 +227,10 @@ export async function verifyReceipt(env: Envelope, opts: VerifyOptions = {}): Pr
   }
   add("payment.capture", typeof r.payment?.capture_id === "string" && r.payment.capture_status === "COMPLETED", `capture ${r.payment?.capture_id} ${r.payment?.capture_status}`);
   add("audit.anchor", /^[0-9a-f]{64}$/.test(r.audit?.capture_entry_hash ?? ""), `audit entry #${r.audit?.capture_entry_seq} ${String(r.audit?.capture_entry_hash).slice(0, 16)}…`);
+
+  // 4a. Cumulative spend recomputed from hash-linked capture entries, proven in an externally anchored audit head.
+  checkSpend(r, add, warnings);
+  checkAnchor(r, env.anchor, tsaTime, { roots: opts.tsaRoots, maxLagMs: opts.maxAnchorLagMs ?? 24 * 3600_000, require: !!opts.requireAnchor }, add, warnings);
 
   // 4b. AP2 views (if present): recomputed exactly and chain-linked to this receipt.
   if (r.ap2) checks.push(...verifyAp2(r)); else warnings.push("receipt has no AP2 views (issued before AP2 compatibility).");

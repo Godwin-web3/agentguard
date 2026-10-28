@@ -15,6 +15,8 @@ export interface PaymentRow {
   error: string | null; created_at: string; updated_at: string;
 }
 
+export interface AuditEntry { seq: number; ts: string; event: string; ref: string | null; payload: string; prev_hash: string; hash: string }
+
 export class Store {
   db: DatabaseSync;
   constructor(path = process.env.AGENTGUARD_DB ?? "./data/agentguard.db") {
@@ -62,18 +64,56 @@ export class Store {
   }
 
   /** Runs fn inside BEGIN IMMEDIATE so concurrent proposals serialize on the write lock (no double-spend of budget). */
+  private depth = 0;
+  /** Reentrant: a nested tx() joins the outer transaction. */
   tx<T>(fn: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
-    try { const r = fn(); this.db.exec("COMMIT"); return r; } catch (e) { this.db.exec("ROLLBACK"); throw e; }
+    if (this.depth > 0) { this.depth++; try { return fn(); } finally { this.depth--; } }
+    this.db.exec("BEGIN IMMEDIATE"); this.depth = 1;
+    try { const r = fn(); this.depth = 0; this.db.exec("COMMIT"); return r; } catch (e) { this.depth = 0; this.db.exec("ROLLBACK"); throw e; }
   }
 
   // ---- audit: hash-chained, append-only ----
-  audit(event: string, ref: string | null, payload: unknown): void {
+  audit(event: string, ref: string | null, payload: unknown): AuditEntry {
     const prev = (this.db.prepare("SELECT hash FROM audit ORDER BY seq DESC LIMIT 1").get() as any)?.hash ?? "GENESIS";
     const ts = new Date().toISOString();
     const body = canonical(payload);
     const hash = sha256(`${prev}|${ts}|${event}|${ref ?? ""}|${body}`);
-    this.db.prepare("INSERT INTO audit (ts,event,ref,payload,prev_hash,hash) VALUES (?,?,?,?,?,?)").run(ts, event, ref, body, prev, hash);
+    const r = this.db.prepare("INSERT INTO audit (ts,event,ref,payload,prev_hash,hash) VALUES (?,?,?,?,?,?)").run(ts, event, ref, body, prev, hash);
+    return { seq: Number(r.lastInsertRowid), ts, event, ref, payload: body, prev_hash: prev, hash };
+  }
+  auditEntry(seq: number): AuditEntry | null {
+    const r = this.db.prepare("SELECT * FROM audit WHERE seq=?").get(seq) as any;
+    return r ? { seq: Number(r.seq), ts: r.ts, event: r.event, ref: r.ref, payload: r.payload, prev_hash: r.prev_hash, hash: r.hash } : null;
+  }
+  /** Entry hashes in seq order, 1..size (the leaves of the anchored Merkle tree). */
+  auditHashes(size?: number): string[] {
+    return (this.db.prepare(`SELECT hash FROM audit ORDER BY seq ${size ? "LIMIT ?" : ""}`).all(...(size ? [size] : [])) as any[]).map(r => r.hash);
+  }
+
+  /**
+   * Per-mandate spend chain. Every capture appends an audit entry carrying the running total and the hash of the
+   * mandate's previous capture entry, so a receipt can carry the mandate's whole capture history and a verifier can
+   * recompute cumulative spend (and prove each entry is in the anchored log). Call inside tx().
+   */
+  appendSpend(event: "payment.captured" | "payment.recovered_captured", paymentId: string, mandateId: string, amountMinor: number, currency: string,
+    extra: Record<string, unknown>): AuditEntry {
+    const prev = this.spendEntries(mandateId).at(-1);
+    const pp = prev ? JSON.parse(prev.payload) : null;
+    let base: Record<string, unknown> = {};
+    if (!prev) {
+      // Captures recorded before the spend chain existed are not hash-linked; disclose them as an attested prefix.
+      const legacy = this.db.prepare("SELECT COUNT(*) n, COALESCE(SUM(amount_minor),0) s FROM payments WHERE mandate_id=? AND status='captured' AND payment_id<>?").get(mandateId, paymentId) as any;
+      if (Number(legacy.n) > 0) base = { unchained_prior: { count: Number(legacy.n), amount_minor: Number(legacy.s) } };
+    }
+    const priorMinor = pp ? Number(pp.cumulative_minor) : Number((base.unchained_prior as any)?.amount_minor ?? 0);
+    const priorCount = pp ? Number(pp.spend_index) : Number((base.unchained_prior as any)?.count ?? 0);
+    return this.audit(event, paymentId, { ...extra, ...base, mandate_id: mandateId, amount_minor: amountMinor, currency,
+      spend_index: priorCount + 1, cumulative_minor: priorMinor + amountMinor, prev_spend_hash: prev?.hash ?? null });
+  }
+  spendEntries(mandateId: string, uptoSeq?: number): AuditEntry[] {
+    return (this.db.prepare(`SELECT * FROM audit WHERE event IN ('payment.captured','payment.recovered_captured') AND json_extract(payload,'$.mandate_id')=?
+      AND json_extract(payload,'$.spend_index') IS NOT NULL ${uptoSeq ? "AND seq<=?" : ""} ORDER BY seq`).all(...(uptoSeq ? [mandateId, uptoSeq] : [mandateId])) as any[])
+      .map(r => ({ seq: Number(r.seq), ts: r.ts, event: r.event, ref: r.ref, payload: r.payload, prev_hash: r.prev_hash, hash: r.hash }));
   }
   verifyAuditChain(): { ok: boolean; brokenAt?: number; length: number } {
     const rows = this.db.prepare("SELECT * FROM audit ORDER BY seq").all() as any[];
@@ -105,9 +145,9 @@ export class Store {
   listMandates(): SignedMandate[] {
     return (this.db.prepare("SELECT mandate_id FROM mandates ORDER BY created_at DESC").all() as any[]).map(r => this.getMandate(r.mandate_id)!);
   }
-  /** CAS draft|unsigned -> active with the user's signature. */
+  /** CAS draft|unsigned|frozen -> active with the user's signature. */
   setMandateSigned(id: string, sig: UserSignature): boolean {
-    const r = this.db.prepare("UPDATE mandates SET user_signature=?, status='active', updated_at=? WHERE mandate_id=? AND status IN ('draft','unsigned')")
+    const r = this.db.prepare("UPDATE mandates SET user_signature=?, status='active', updated_at=? WHERE mandate_id=? AND status IN ('draft','unsigned','frozen')")
       .run(canonical(sig), new Date().toISOString(), id);
     return Number(r.changes) === 1;
   }
