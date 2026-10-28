@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!--#include head-->
+<title>Verify a receipt · AgentGuard</title>
+<meta name="description" content="Verify an AgentGuard Proof-of-Intent receipt in your browser: issuer signature, passkey-signed mandate and approval, order bounds, timestamps and capture. Nothing is uploaded.">
+</head>
+<body>
+<!--#include nav-->
+<main id="main" class="section" style="padding-top:48px">
+  <div class="container stack gap-8">
+    <header class="stack gap-3" style="max-width:720px">
+      <span class="eyebrow">Receipt verifier</span>
+      <h1 class="h2">Verify a receipt in your browser.</h1>
+      <p class="lede">The same verifier as the <code class="mono">intent-verify</code> CLI, compiled for the browser. It checks the issuer signature against a pinned key set, both passkey signatures, the order against the mandate, RFC 3161 timestamps and the capture. The receipt never leaves this page.</p>
+    </header>
+
+    <div class="rv-grid">
+      <section class="card" aria-labelledby="inTitle">
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-file-text"/></svg><h2 class="h3" id="inTitle" style="font-size:var(--text-md)">Receipt</h2>
+          <div class="grow"></div>
+          <button class="btn btn-ghost btn-sm" type="button" id="loadSample">Load sandbox sample</button>
+        </div>
+        <div class="card-bd stack gap-4">
+          <div class="field">
+            <label class="label" for="rjson">Receipt JSON</label>
+            <textarea class="textarea mono" id="rjson" rows="12" spellcheck="false" placeholder='{ "receipt": { … }, "signature": { … }, "timestamps": [ … ] }'></textarea>
+            <p class="hint">Paste a receipt envelope, or <label class="link" for="rfile">choose a file</label><input id="rfile" type="file" accept="application/json,.json" class="sr-only">. You can also drop one on the box.</p>
+          </div>
+          <div class="field">
+            <label class="label" for="keys">Issuer key set</label>
+            <select class="input" id="keys">
+              <option value="pinned">Pinned: agentguard-orcin.vercel.app (published key set)</option>
+              <option value="origin">This deployment: /.well-known/agentguard-keys</option>
+              <option value="embedded">None: trust the key embedded in the receipt (weak)</option>
+            </select>
+          </div>
+          <div class="row gap-2">
+            <button class="btn btn-primary" type="button" id="verifyBtn"><svg class="i"><use href="/brand/icons.svg#i-file-check"/></svg>Verify</button>
+            <button class="btn btn-secondary" type="button" id="tamper" title="Change the amount by one cent and verify again"><svg class="i"><use href="/brand/icons.svg#i-triangle-alert"/></svg>Tamper with amount</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="outTitle" aria-live="polite" id="out">
+        <h2 class="sr-only" id="outTitle">Result</h2>
+        <div class="empty" id="outEmpty"><svg class="i"><use href="/brand/icons.svg#i-file-check"/></svg><b>No receipt verified yet</b><p>Paste a receipt or load the sandbox sample. Verification runs locally.</p></div>
+        <div id="outBody" hidden>
+          <div class="verdict" id="verdict"><div class="mark"><svg class="i"><use id="vIcon" href="/brand/icons.svg#i-check"/></svg></div>
+            <div class="stack"><span class="word" id="vWord">VALID</span><span class="small muted" id="vSub"></span></div></div>
+          <dl class="kv" id="summary"></dl>
+          <div class="card-hd" style="border-top:1px solid var(--border)"><svg class="i"><use href="/brand/icons.svg#i-list-checks"/></svg><span class="small" style="font-weight:560">Checks</span><div class="grow"></div><span class="badge badge-mono" id="cCount"></span></div>
+          <div id="checks"></div>
+          <div id="warnings"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+<!--#include footer-->
+<script type="module" src="/assets/site.js"></script>
+<script type="module" src="/assets/receipt.js"></script>
+</body>
+</html>

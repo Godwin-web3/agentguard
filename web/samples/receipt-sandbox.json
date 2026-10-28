@@ -1,0 +1,499 @@
+{
+  "receipt": {
+    "schema": "agentguard.proof-of-intent/v1",
+    "receipt_id": "poi_2b2b34d8c4bfa2e098cadba6",
+    "issuer": {
+      "name": "agentguard-orcin.vercel.app",
+      "key_id": "7dc269289ef46e2f7fe086edb8686383",
+      "webauthn_rp_id": "agentguard-orcin.vercel.app",
+      "webauthn_origins": [
+        "https://agentguard-orcin.vercel.app"
+      ]
+    },
+    "issued_at": "2026-10-28T16:24:33.769Z",
+    "mandate": {
+      "body": {
+        "agent_id": "held-10258",
+        "constraints": {
+          "allowed_categories": [
+            "DIGITAL_GOODS"
+          ],
+          "currency": "USD",
+          "max_quantity_per_item": 1,
+          "max_total": "25.00",
+          "max_transactions": 2,
+          "payee_allowlist": [
+            "sb-v7o7s53470988@business.example.com"
+          ],
+          "require_human_approval_over": "5.00",
+          "require_merchant_order": true,
+          "sku_allowlist": [
+            "AG-CREDITS-10"
+          ]
+        },
+        "created_at": "2026-10-28T16:24:24.650Z",
+        "expires_at": "2026-10-28T18:24:24.650Z",
+        "mandate_id": "mdt_f1a6ef71-d690-48be-a567-fe5de328cedf",
+        "purpose": "Buy API credits; ask me above 5 USD",
+        "user_id": "demo-user",
+        "version": 1
+      },
+      "hash": "2ca2d3018c703ffaf5988c179f27f4f2bc77eb7e3fabacfd357d478f18d27611",
+      "user_signature": {
+        "authenticator_data": "HKp-R5njXFboaIA2IQueL77ktVE9QtZDWNovicKeTokFAAAAAQ",
+        "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiTEtMVEFZeHdQX3IxbUl3WG55ZjA4cngzNjM0X3E2ejlOWDFIanhqU2RoRSIsIm9yaWdpbiI6Imh0dHBzOi8vYWdlbnRndWFyZC1vcmNpbi52ZXJjZWwuYXBwIn0",
+        "credential_id": "aNP0Q5kk4XC8VYp_Qm9evw",
+        "signature": "MEUCIQCrRNME8WIX3kcotjELW_39M7J4fUHvX77k_hhvPu0dOAIgeHBCR6L3xquK5a5iiib3ifDQ_8BuE5_RA7wNriSbdWk"
+      },
+      "passkey": {
+        "credential_id": "aNP0Q5kk4XC8VYp_Qm9evw",
+        "public_key_cose": "pQECAyYgASFYIEevulvVdwcjzB8xjtUpBzt-qtJOUgFgZCQ9Dy_GyMZZIlggowxoG9QBDPkQbTgf7Ab_tr-acLVGBxYGfo526kxOOUo",
+        "enrollment": {
+          "token_id": "cacacab4838917de",
+          "via": "admin_link",
+          "issued_by": "dev-passkey",
+          "issued_at": "2026-10-28T16:24:25.065Z",
+          "redeemed_at": "2026-10-28T16:24:25.193Z",
+          "replaces": null
+        }
+      }
+    },
+    "order": {
+      "paypal_order_id": "8FF97705JB819194D",
+      "digest": "141ae0a6dcf92778f494f07165a73b196117460af4d640c801ff486c8c46ee0d",
+      "snapshot": {
+        "id": "8FF97705JB819194D",
+        "intent": "AUTHORIZE",
+        "status": "CREATED",
+        "purchase_units": [
+          {
+            "reference_id": "default",
+            "amount": {
+              "currency_code": "USD",
+              "value": "10.80",
+              "breakdown": {
+                "item_total": {
+                  "currency_code": "USD",
+                  "value": "10.00"
+                },
+                "tax_total": {
+                  "currency_code": "USD",
+                  "value": "0.80"
+                }
+              }
+            },
+            "payee": {
+              "email_address": "sb-v7o7s53470988@business.example.com",
+              "merchant_id": "M32J3M4A7KASQ"
+            },
+            "items": [
+              {
+                "name": "API credits",
+                "unit_amount": {
+                  "currency_code": "USD",
+                  "value": "10.00"
+                },
+                "quantity": "1",
+                "sku": "AG-CREDITS-10",
+                "category": "DIGITAL_GOODS"
+              }
+            ]
+          }
+        ],
+        "create_time": "2026-10-28T16:24:26Z",
+        "links": [
+          {
+            "href": "https://api.sandbox.paypal.com/v2/checkout/orders/8FF97705JB819194D",
+            "rel": "self",
+            "method": "GET"
+          },
+          {
+            "href": "https://www.sandbox.paypal.com/checkoutnow?token=8FF97705JB819194D",
+            "rel": "approve",
+            "method": "GET"
+          },
+          {
+            "href": "https://api.sandbox.paypal.com/v2/checkout/orders/8FF97705JB819194D",
+            "rel": "update",
+            "method": "PATCH"
+          },
+          {
+            "href": "https://api.sandbox.paypal.com/v2/checkout/orders/8FF97705JB819194D/authorize",
+            "rel": "authorize",
+            "method": "POST"
+          }
+        ]
+      },
+      "snapshot_source": "GET /v2/checkout/orders/{id} as read by AgentGuard immediately before authorization"
+    },
+    "decision": {
+      "decision": "needs_human",
+      "proposal_hash": "204305884b1ee13eaf3e5eddb4b9870ae22cabe79423c5a189ee7f1486c16d6c",
+      "amount_minor": 1080,
+      "checks": [
+        {
+          "check": "amount_parse",
+          "pass": true,
+          "detail": "total 1080 minor units"
+        },
+        {
+          "check": "mandate_signature",
+          "pass": true,
+          "detail": "signature verified"
+        },
+        {
+          "check": "mandate_status",
+          "pass": true,
+          "detail": "status=active"
+        },
+        {
+          "check": "mandate_expiry",
+          "pass": true,
+          "detail": "expires 2026-10-28T18:24:24.650Z"
+        },
+        {
+          "check": "agent_binding",
+          "pass": true,
+          "detail": "proposal agent held-10258, mandate agent held-10258"
+        },
+        {
+          "check": "currency",
+          "pass": true,
+          "detail": "USD vs allowed USD"
+        },
+        {
+          "check": "items_present",
+          "pass": true,
+          "detail": "1 items"
+        },
+        {
+          "check": "total_limit",
+          "pass": true,
+          "detail": "committed 0 + 1080 <= 2500"
+        },
+        {
+          "check": "transaction_count",
+          "pass": true,
+          "detail": "0 used of 2"
+        },
+        {
+          "check": "merchant_order",
+          "pass": true,
+          "detail": "PayPal order 8FF97705JB819194D"
+        },
+        {
+          "check": "sku_allowlist",
+          "pass": true,
+          "detail": "all skus allowlisted"
+        },
+        {
+          "check": "category",
+          "pass": true,
+          "detail": "all items in allowed categories"
+        },
+        {
+          "check": "payee_identified",
+          "pass": true,
+          "detail": "m32j3m4a7kasq, sb-v7o7s53470988@business.example.com"
+        },
+        {
+          "check": "payee_allowlist",
+          "pass": true,
+          "detail": "payee m32j3m4a7kasq/sb-v7o7s53470988@business.example.com allowlisted"
+        },
+        {
+          "check": "quantity",
+          "pass": true,
+          "detail": "ok"
+        },
+        {
+          "check": "order_unused",
+          "pass": true,
+          "detail": "order not used by another payment"
+        }
+      ],
+      "risk": [],
+      "reasons": [
+        "amount 1080 exceeds human-approval threshold 500"
+      ],
+      "evaluated_at": "2026-10-28T16:24:27.432Z",
+      "agent_id": "held-10258",
+      "idempotency_key": "held-8110",
+      "agent_context": [],
+      "agent_rationale": null
+    },
+    "approval": {
+      "approval_id": "apr_01139ea1-be93-464b-a434-2bacd51b427f",
+      "resolution": "approved",
+      "resolved_at": "2026-10-28T16:24:29.301Z",
+      "proposal_hash": "204305884b1ee13eaf3e5eddb4b9870ae22cabe79423c5a189ee7f1486c16d6c",
+      "approver": "console",
+      "audit_hash": "13daa9334beea13900388342e70b86ba78f76be90b1bea65ae4c67ab56790e00",
+      "method": "passkey",
+      "statement": {
+        "amount_minor": 1080,
+        "approval_id": "apr_01139ea1-be93-464b-a434-2bacd51b427f",
+        "currency": "USD",
+        "decision": "approve",
+        "expires_at": "2026-10-28T16:29:29.189Z",
+        "kind": "agentguard.payment-approval",
+        "mandate_id": "mdt_f1a6ef71-d690-48be-a567-fe5de328cedf",
+        "nonce": "c9743213-4204-43c6-842a-37fd1a29f149",
+        "order_digest": "141ae0a6dcf92778f494f07165a73b196117460af4d640c801ff486c8c46ee0d",
+        "payment_id": "pay_fd235374-84c8-4ea6-9902-a7ca902277b2",
+        "paypal_order_id": "8FF97705JB819194D",
+        "proposal_hash": "204305884b1ee13eaf3e5eddb4b9870ae22cabe79423c5a189ee7f1486c16d6c",
+        "user_id": "demo-user",
+        "v": 1
+      },
+      "assertion": {
+        "authenticator_data": "HKp-R5njXFboaIA2IQueL77ktVE9QtZDWNovicKeTokFAAAAAg",
+        "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoieE5kWEdGa2FCMUpHR3JEeUxDVEkwMTl0bUd5N09lX1JjdEhTQmdlQ0FqUSIsIm9yaWdpbiI6Imh0dHBzOi8vYWdlbnRndWFyZC1vcmNpbi52ZXJjZWwuYXBwIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "credential_id": "aNP0Q5kk4XC8VYp_Qm9evw",
+        "signature": "MEYCIQCN1LwObG94gf4YHPIG5UsaVcuz5yCmTNf4aX8QFEpUxQIhAKJ80tVD1Wo2JaFIrilqV6zdYd_fEbqLJhIsSSx6rnLG"
+      }
+    },
+    "payment": {
+      "payment_id": "pay_fd235374-84c8-4ea6-9902-a7ca902277b2",
+      "currency": "USD",
+      "amount_minor": 1080,
+      "authorization_id": "1GV57061K52536844",
+      "capture_id": "3XR94817KX253751R",
+      "capture_status": "COMPLETED",
+      "paypal_invoice_id": "AGPOI-poi_2b2b34d8c4bfa2e098cadba6",
+      "proposed_at": "2026-10-28T16:24:27.432Z",
+      "captured_at": "2026-10-28T16:24:33.726Z"
+    },
+    "audit": {
+      "capture_entry_seq": 10,
+      "capture_entry_hash": "d113be9aa9f89a044e61b611e43657da7ba9cd54476317d6ddb9c3da7f38f4bd"
+    },
+    "spend": {
+      "mandate_id": "mdt_f1a6ef71-d690-48be-a567-fe5de328cedf",
+      "entries": [
+        {
+          "seq": 10,
+          "ts": "2026-10-28T16:24:33.726Z",
+          "event": "payment.captured",
+          "ref": "pay_fd235374-84c8-4ea6-9902-a7ca902277b2",
+          "payload": "{\"amount_minor\":1080,\"capture_id\":\"3XR94817KX253751R\",\"cumulative_minor\":1080,\"currency\":\"USD\",\"invoice_id\":\"AGPOI-poi_2b2b34d8c4bfa2e098cadba6\",\"mandate_id\":\"mdt_f1a6ef71-d690-48be-a567-fe5de328cedf\",\"prev_spend_hash\":null,\"spend_index\":1,\"status\":\"COMPLETED\"}",
+          "prev_hash": "e01c49d844b2cd068e2e692fd987702639243141127fc4ea3c7c7412c8134e7a",
+          "hash": "d113be9aa9f89a044e61b611e43657da7ba9cd54476317d6ddb9c3da7f38f4bd"
+        }
+      ],
+      "count": 1,
+      "cumulative_minor": 1080
+    },
+    "ap2": {
+      "profile": "agentguard.ap2-view/v1",
+      "spec": "google-agentic-commerce/AP2@e1ea56d",
+      "intent_mandate": {
+        "open_checkout_mandate": {
+          "vct": "mandate.checkout.open.1",
+          "constraints": [
+            {
+              "type": "checkout.allowed_merchants",
+              "allowed": [
+                {
+                  "id": "sb-v7o7s53470988@business.example.com",
+                  "name": "sb-v7o7s53470988@business.example.com"
+                }
+              ]
+            },
+            {
+              "type": "checkout.line_items",
+              "items": [
+                {
+                  "id": "agentguard-line-1",
+                  "acceptable_items": [
+                    {
+                      "id": "AG-CREDITS-10",
+                      "title": "AG-CREDITS-10"
+                    }
+                  ],
+                  "quantity": 1
+                }
+              ]
+            }
+          ],
+          "cnf": {
+            "kid": "agentguard-agent:held-10258"
+          },
+          "iat": 1793204664,
+          "exp": 1793211864,
+          "agentguard_mandate_id": "mdt_f1a6ef71-d690-48be-a567-fe5de328cedf",
+          "agentguard_mandate_hash": "2ca2d3018c703ffaf5988c179f27f4f2bc77eb7e3fabacfd357d478f18d27611",
+          "purpose": "Buy API credits; ask me above 5 USD",
+          "agentguard_constraint_source": "sku_allowlist"
+        },
+        "open_payment_mandate": {
+          "vct": "mandate.payment.open.1",
+          "constraints": [
+            {
+              "type": "payment.reference",
+              "conditional_transaction_id": "sJK7DwUgBmAdvew5pLU8FNoeN4C6PemkXC_fj3oQ82E"
+            },
+            {
+              "type": "payment.amount_range",
+              "currency": "USD",
+              "max": 2500
+            },
+            {
+              "type": "payment.budget",
+              "currency": "USD",
+              "max": 25
+            },
+            {
+              "type": "payment.agent_recurrence",
+              "frequency": "ON_DEMAND",
+              "max_occurrences": 2
+            },
+            {
+              "type": "payment.execution_date",
+              "not_before": "2026-10-28T16:24:24.650Z",
+              "not_after": "2026-10-28T18:24:24.650Z"
+            },
+            {
+              "type": "payment.allowed_payees",
+              "allowed": [
+                {
+                  "id": "sb-v7o7s53470988@business.example.com",
+                  "name": "sb-v7o7s53470988@business.example.com"
+                }
+              ]
+            }
+          ],
+          "cnf": {
+            "kid": "agentguard-agent:held-10258"
+          },
+          "iat": 1793204664,
+          "exp": 1793211864,
+          "agentguard_mandate_id": "mdt_f1a6ef71-d690-48be-a567-fe5de328cedf",
+          "agentguard_mandate_hash": "2ca2d3018c703ffaf5988c179f27f4f2bc77eb7e3fabacfd357d478f18d27611"
+        }
+      },
+      "cart_mandate": {
+        "checkout_mandate": {
+          "vct": "mandate.checkout.1",
+          "checkout_jwt": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIiwiY3R5IjoicGF5cGFsLW9yZGVyLXNuYXBzaG90In0.eyJpc3MiOiJwYXlwYWw6b3JkZXJzLXYyIiwibGluZV9pdGVtcyI6W3siY2F0ZWdvcnkiOiJESUdJVEFMX0dPT0RTIiwiaXRlbSI6eyJpZCI6IkFHLUNSRURJVFMtMTAiLCJ0aXRsZSI6IkFQSSBjcmVkaXRzIn0sInF1YW50aXR5IjoxLCJ1bml0X2Ftb3VudCI6MTAwMH1dLCJtZXJjaGFudCI6eyJpZCI6Ik0zMkozTTRBN0tBU1EiLCJuYW1lIjoiTTMySjNNNEE3S0FTUSJ9LCJvcmRlcl9kaWdlc3QiOiIxNDFhZTBhNmRjZjkyNzc4ZjQ5NGYwNzE2NWE3M2IxOTYxMTc0NjBhZjRkNjQwYzgwMWZmNDg2YzhjNDZlZTBkIiwic3ViIjoiOEZGOTc3MDVKQjgxOTE5NEQiLCJ0b3RhbCI6eyJhbW91bnQiOjEwODAsImN1cnJlbmN5IjoiVVNEIn19.",
+          "checkout_hash": "45GV_5Yb-5CyVvdVTQsxM6xFCL2nnuOOJlIqr6YBtDQ",
+          "iat": 1793204667,
+          "exp": 1793211864,
+          "agentguard_mandate_id": "mdt_f1a6ef71-d690-48be-a567-fe5de328cedf",
+          "agentguard_mandate_hash": "2ca2d3018c703ffaf5988c179f27f4f2bc77eb7e3fabacfd357d478f18d27611"
+        }
+      },
+      "payment_mandate": {
+        "vct": "mandate.payment.1",
+        "transaction_id": "45GV_5Yb-5CyVvdVTQsxM6xFCL2nnuOOJlIqr6YBtDQ",
+        "payee": {
+          "id": "M32J3M4A7KASQ",
+          "name": "M32J3M4A7KASQ"
+        },
+        "payment_amount": {
+          "amount": 1080,
+          "currency": "USD"
+        },
+        "payment_instrument": {
+          "id": "paypal-vault:demo-user",
+          "type": "PAYPAL_WALLET",
+          "description": "User's vaulted PayPal wallet (token held by AgentGuard, never by the agent)"
+        },
+        "risk_data": {
+          "agentguard_decision": "needs_human",
+          "agentguard_risk": []
+        },
+        "iat": 1793204667,
+        "exp": 1793211864,
+        "agentguard_mandate_id": "mdt_f1a6ef71-d690-48be-a567-fe5de328cedf",
+        "agentguard_mandate_hash": "2ca2d3018c703ffaf5988c179f27f4f2bc77eb7e3fabacfd357d478f18d27611"
+      },
+      "receipts": {
+        "checkout_receipt": {
+          "status": "Success",
+          "iss": "agentguard-orcin.vercel.app",
+          "iat": 1793204673,
+          "reference": "45GV_5Yb-5CyVvdVTQsxM6xFCL2nnuOOJlIqr6YBtDQ",
+          "order_id": "8FF97705JB819194D"
+        },
+        "payment_receipt": {
+          "status": "Success",
+          "iss": "agentguard-orcin.vercel.app",
+          "iat": 1793204673,
+          "reference": "p74fi8cJZYEZ2ikb0D2Mg74_pMkC3TveD_Lf9Rqg6SY",
+          "payment_id": "pay_fd235374-84c8-4ea6-9902-a7ca902277b2",
+          "psp_confirmation_id": "3XR94817KX253751R",
+          "network_confirmation_id": "1GV57061K52536844"
+        }
+      },
+      "user_authorization": {
+        "method": "webauthn-passkey",
+        "signed_digest_sha256": "2ca2d3018c703ffaf5988c179f27f4f2bc77eb7e3fabacfd357d478f18d27611",
+        "credential_id": "aNP0Q5kk4XC8VYp_Qm9evw",
+        "note": "Passkey assertion over the AgentGuard mandate hash; open mandates carry the same agentguard_mandate_hash."
+      },
+      "caveats": [
+        "Mandates are plain JSON claim sets, not SD-JWT/KB-JWT; no selective disclosure.",
+        "User authority is a WebAuthn passkey assertion over sha256(canonical(AgentGuard mandate)), carried as user_authorization, not an SD-JWT issuer signature over the AP2 open mandates; the open mandates are derived from (and pinned to) that signed mandate.",
+        "checkout_jwt is an unsecured JWT (alg none) of PayPal's order as AgentGuard read it via GET /v2/checkout/orders/{id}; merchant authenticity comes from PayPal's API, not a merchant JWS.",
+        "cnf uses {kid: agent id}, not an agent JWK.",
+        "network_confirmation_id carries the PayPal authorization id (PayPal is both PSP and network here)."
+      ]
+    }
+  },
+  "signature": {
+    "alg": "Ed25519",
+    "key_id": "7dc269289ef46e2f7fe086edb8686383",
+    "kid": "7dc269289ef46e2f7fe086edb8686383",
+    "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEApgYgEtgE5iylkHeLvZnskrNGKKPhm0Bhcz2wGfo9Wio=\n-----END PUBLIC KEY-----\n",
+    "value": "jVZie0xbpSK7Mfv3BKac0QmTUFbQ2jy+XKIWUNjK3ijkAxST3JKlMPXP2gm093Wh6SMXGKCARkNjqIeyfphKBA=="
+  },
+  "timestamps": [
+    {
+      "tsa": "freetsa",
+      "url": "https://freetsa.org/tsr",
+      "token": "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",
+      "gen_time": "2026-10-28T16:24:33.000Z"
+    },
+    {
+      "tsa": "sectigo",
+      "url": "https://timestamp.sectigo.com",
+      "token": "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",
+      "gen_time": "2026-10-28T16:24:33.000Z"
+    }
+  ],
+  "anchor": {
+    "anchor_id": 1,
+    "statement": {
+      "head_hash": "71193dbed422225009898636899e95fca61f365409e20d8840b3f6ee69092506",
+      "head_seq": 12,
+      "issuer": "agentguard-orcin.vercel.app",
+      "kind": "agentguard.audit-anchor",
+      "root": "dc2022104f8eb5f3be03a833d114845820367f4bf3021762437d8987e0d07d57",
+      "size": 12,
+      "v": 1
+    },
+    "statement_hash": "b5dba6e7acd4a45a14d9eac11c09ba8bcb9df0f3aeee1dcb73394409c876cfdb",
+    "timestamps": [
+      {
+        "tsa": "freetsa",
+        "url": "https://freetsa.org/tsr",
+        "token": "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",
+        "gen_time": "2026-10-28T16:24:34.000Z"
+      }
+    ],
+    "anchored_at": "2026-10-28T16:24:37.098Z",
+    "proofs": [
+      {
+        "seq": 10,
+        "index": 9,
+        "hash": "d113be9aa9f89a044e61b611e43657da7ba9cd54476317d6ddb9c3da7f38f4bd",
+        "path": [
+          "b7918758fb1264714ec24768ed4185aaf7d8140474589917f791a66de99e5567",
+          "dcbd2c57dde29b2e48008d8c3a34c3db01ebdcdd6456d8f3adc2d6200fcbd513",
+          "f027218828a6ca54a71a5b58eec843aa6637e17083dd6811296725c192d9b8a8"
+        ]
+      }
+    ]
+  }
+}

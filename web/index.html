@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!--#include head-->
+<title>AgentGuard: verifiable intent for agent payments</title>
+<meta name="description" content="Users sign bounded payment mandates with a passkey. AgentGuard enforces them before PayPal moves money and issues a receipt anyone can verify. AP2-compatible.">
+<meta property="og:title" content="AgentGuard: verifiable intent for agent payments">
+<meta property="og:description" content="AP2-style verifiable intent, enforced and dispute-ready on PayPal, today.">
+</head>
+<body>
+<!--#include nav-->
+<main id="main">
+<section class="hero">
+  <div class="gridlines" aria-hidden="true"></div>
+  <div class="container hero-inner">
+    <div class="stack gap-6">
+      <a class="badge badge-accent" href="#ap2" style="width:max-content"><svg class="i i-sm"><use href="/brand/icons.svg#g-bounds"/></svg>AP2-compatible receipts, verified on the PayPal sandbox</a>
+      <h1 class="display">Verifiable intent for agent payments. <span class="tone">Enforced on PayPal, today.</span></h1>
+      <p class="lede">Your user signs what their agent may buy, with a passkey. AgentGuard holds every payment to those bounds before PayPal moves money, then issues a signed, timestamped receipt that anyone can check.</p>
+      <div class="row gap-3 wrap">
+        <a class="btn btn-primary btn-lg" href="#quickstart">Get started<svg class="i"><use href="/brand/icons.svg#i-arrow-right"/></svg></a>
+        <a class="btn btn-secondary btn-lg" href="/receipt?sample=sandbox"><svg class="i"><use href="/brand/icons.svg#g-receipt"/></svg>Verify a real receipt</a>
+      </div>
+      <div class="standards" aria-label="Standards used">
+        <span>WebAuthn passkeys</span><span>Ed25519</span><span>RFC 3161</span><span>Merkle anchoring</span><span>PayPal Orders v2</span>
+      </div>
+    </div>
+
+    <div class="mock" aria-label="Product preview: an approval in the console and the resulting receipt">
+      <div class="card mock-approval">
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-inbox"/></svg><h3>Approval needed</h3><span class="badge badge-warning" style="margin-left:auto"><span class="dot"></span>held</span></div>
+        <div class="card-bd stack gap-3">
+          <div class="row gap-3"><div class="amount">$10.80</div><span class="subtle small">USD to sandbox merchant</span></div>
+          <div class="small muted">1 × API credits <code class="inline">AG-CREDITS-10</code></div>
+          <ul class="reasons" style="margin:0">
+            <li><svg class="i"><use href="/brand/icons.svg#i-circle-alert"/></svg>Above your $5.00 ask-me threshold</li>
+            <li><svg class="i"><use href="/brand/icons.svg#i-circle-check"/></svg>Payee, SKU and $25.00 budget all inside the mandate</li>
+          </ul>
+          <div class="row gap-2 wrap">
+            <span class="btn btn-success btn-sm" aria-hidden="true"><svg class="i"><use href="/brand/icons.svg#i-fingerprint"/></svg>Approve with passkey</span>
+            <span class="btn btn-danger btn-sm" aria-hidden="true">Deny</span>
+            <span class="pk" style="margin-left:auto"><svg class="i i-sm"><use href="/brand/icons.svg#g-passkey"/></svg>passkey registered</span>
+          </div>
+        </div>
+      </div>
+      <div class="card mock-receipt">
+        <div class="verdict ok" style="padding:14px 16px 10px"><div class="mark"><svg class="i i-lg"><use href="/brand/icons.svg#i-check"/></svg></div>
+          <div class="stack"><span class="word">VALID</span><span class="xs subtle">Receipt poi_2b2b…dba6 · sandbox</span></div></div>
+        <div>
+          <div class="check-row"><svg class="i ok"><use href="/brand/icons.svg#i-check"/></svg><span class="what">User passkey signed the mandate</span><span class="detail">ES256</span></div>
+          <div class="check-row"><svg class="i ok"><use href="/brand/icons.svg#i-check"/></svg><span class="what">Issuer signature</span><span class="detail">Ed25519</span></div>
+          <div class="check-row"><svg class="i ok"><use href="/brand/icons.svg#i-check"/></svg><span class="what">Independent timestamps</span><span class="detail">freetsa · sectigo</span></div>
+          <div class="check-row"><svg class="i ok"><use href="/brand/icons.svg#i-check"/></svg><span class="what">Audit log anchor</span><span class="detail">root dc20…7d57</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="how">
+  <div class="container">
+    <div class="section-hd">
+      <span class="eyebrow">How it works</span>
+      <h2 class="h2">The agent proposes. <span class="tone">The mandate decides.</span></h2>
+      <p class="lede">Agents never hold PayPal credentials. Every payment goes through three steps, and money only moves after the last one.</p>
+    </div>
+    <div class="feature-grid">
+      <div class="stack gap-4">
+        <div class="row gap-3"><div class="glyph-tile"><svg class="i"><use href="/brand/icons.svg#g-mandate"/></svg></div><span class="step-n">01 · reserve</span></div>
+        <h3 class="h3">Reserve against a signed mandate</h3>
+        <p class="muted">A deterministic policy engine checks payee, SKU, category, quantity, per-transaction and total limits against a mandate the user signed with their passkey. Budget is reserved atomically, so parallel agents cannot double-spend it.</p>
+        <p class="xs subtle mono">propose_payment → reserved | needs_human | rejected</p>
+      </div>
+      <div class="stack gap-4">
+        <div class="row gap-3"><div class="glyph-tile"><svg class="i"><use href="/brand/icons.svg#i-fingerprint"/></svg></div><span class="step-n">02 · verify</span></div>
+        <h3 class="h3">Verify with PayPal, and with the user</h3>
+        <p class="muted">AgentGuard authorizes on the user's vaulted wallet, then reads PayPal's own view of amount, currency and payee. Anything above the user's threshold waits for a passkey approval bound to that exact order.</p>
+        <p class="xs subtle mono">intent: AUTHORIZE · payee + amount re-checked</p>
+      </div>
+      <div class="stack gap-4">
+        <div class="row gap-3"><div class="glyph-tile"><svg class="i"><use href="/brand/icons.svg#g-receipt"/></svg></div><span class="step-n">03 · capture</span></div>
+        <h3 class="h3">Capture, or void, and prove it</h3>
+        <p class="muted">Captures run only while the mandate is still active, checked again under lock. Mismatches and revocations void instead. Each capture yields a Proof-of-Intent receipt with a hash-chained audit entry.</p>
+        <p class="xs subtle mono">captured → receipt + RFC 3161 + anchor</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="proof">
+  <div class="container two-col">
+    <div class="stack gap-6">
+      <div class="section-hd" style="margin:0">
+        <span class="eyebrow">Proof-of-Intent receipt</span>
+        <h2 class="h2">Evidence that holds up <span class="tone">without trusting us.</span></h2>
+        <p class="lede">The receipt bundles the user's passkey signature, the order PayPal reported, the approval and the capture. The issuer signs it, two independent timestamp authorities stamp it, and the audit log is anchored.</p>
+      </div>
+      <ul class="checklist">
+        <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Verifies offline with the open-source <code class="inline">intent-verifier</code>, or in your browser.</span></li>
+        <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Retired issuer keys stay published, so old receipts keep verifying after rotation.</span></li>
+        <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Submitted as seller evidence on a live PayPal sandbox dispute, which PayPal accepted for review. No outcome is claimed.</span></li>
+      </ul>
+      <div class="row gap-3 wrap">
+        <a class="btn btn-primary" href="/receipt?sample=sandbox">Verify it in your browser<svg class="i"><use href="/brand/icons.svg#i-arrow-right"/></svg></a>
+        <a class="btn btn-ghost" href="/samples/receipt-sandbox.json"><svg class="i"><use href="/brand/icons.svg#i-file-text"/></svg>Raw JSON</a>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#g-receipt"/></svg><h3>poi_2b2b34d8c4bfa2e098cadba6</h3><span class="badge badge-mono" style="margin-left:auto">SANDBOX</span></div>
+      <dl class="kv">
+        <div><dt>Issuer</dt><dd>agentguard-orcin.vercel.app</dd></div>
+        <div><dt>Mandate</dt><dd>mdt_f1a6ef71-d690-48be-a567-fe5de328cedf</dd></div>
+        <div><dt>Purpose</dt><dd>Buy API credits; ask me above 5 USD</dd></div>
+        <div><dt>PayPal order</dt><dd>8FF97705JB819194D</dd></div>
+        <div><dt>Authorization</dt><dd>1GV57061K52536844</dd></div>
+        <div><dt>Capture</dt><dd>3XR94817KX253751R · COMPLETED</dd></div>
+        <div><dt>Amount</dt><dd>10.80 USD</dd></div>
+        <div><dt>Approval</dt><dd>apr_01139ea1… · passkey</dd></div>
+        <div><dt>Timestamps</dt><dd>freetsa.org · sectigo</dd></div>
+        <div><dt>Anchor root</dt><dd>dc2022104f8eb5f3be03a833d114845820367f4bf3021762437d8987e0d07d57</dd></div>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="ap2">
+  <div class="container">
+    <div class="section-hd">
+      <span class="eyebrow">AP2 compatibility</span>
+      <h2 class="h2">AP2 describes intent. <span class="tone">AgentGuard enforces it on PayPal.</span></h2>
+      <p class="lede">Every receipt carries an <code class="inline">ap2</code> block: the same purchase as Agent Payments Protocol mandates, using AP2's schemas pinned to commit <code class="inline">e1ea56d</code>. The verifier re-derives them from the signed mandate.</p>
+    </div>
+    <div class="card table-wrap">
+      <table class="compare">
+        <thead><tr><th>AP2 role</th><th>AP2 object</th><th>Built from</th><th>Fidelity</th></tr></thead>
+        <tbody>
+          <tr><td>Intent</td><td><code>open_checkout_mandate</code><br><code>open_payment_mandate</code></td><td class="muted">Passkey-signed mandate: payees, SKUs, limits, window</td><td><span class="badge badge-success">exact</span> <span class="small subtle">categories and blocklists stay AgentGuard-only</span></td></tr>
+          <tr><td>Cart</td><td><code>checkout_mandate</code></td><td class="muted">The merchant-created PayPal order AgentGuard read and verified</td><td><span class="badge badge-warning">shape exact</span> <span class="small subtle"><code>checkout_jwt</code> is unsigned (alg none)</span></td></tr>
+          <tr><td>Payment</td><td><code>payment_mandate</code></td><td class="muted">Decision plus PayPal authorization</td><td><span class="badge badge-success">exact</span> <span class="small subtle">vault token never included</span></td></tr>
+          <tr><td>User authority</td><td><code>user_authorization</code></td><td class="muted">WebAuthn assertion over sha256 of the AgentGuard mandate</td><td><span class="badge badge-warning">differs</span> <span class="small subtle">not SD-JWT; same authority, different signed bytes</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="security">
+  <div class="container">
+    <div class="section-hd">
+      <span class="eyebrow">Security model</span>
+      <h2 class="h2">What we guarantee, <span class="tone">and where it stops.</span></h2>
+      <p class="lede">The server holds no key that can authorize spending. AI risk analysis is advisory: it can escalate a payment to a human, never approve a failing one.</p>
+    </div>
+    <div class="limits">
+      <div class="card">
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-lock"/></svg><h3>Enforced</h3></div>
+        <div class="card-bd"><ul class="checklist">
+          <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Mandates, revocations and approvals are signed by the user's passkey. The server re-verifies them on every proposal, approval and capture.</span></li>
+          <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Approvals are single-use and bound to the exact proposal hash, PayPal order, amount and a five-minute nonce.</span></li>
+          <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Payee allowlists are checked against the payee PayPal reports, not only what the agent claims.</span></li>
+          <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Idempotency keys and PayPal-Request-Id on every money call. Recovery never captures against an inactive mandate.</span></li>
+          <li><svg class="i"><use href="/brand/icons.svg#i-check"/></svg><span>Every decision lands in a hash-chained, append-only audit log, anchored with RFC 3161 timestamps.</span></li>
+        </ul></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-triangle-alert"/></svg><h3>Honest limits</h3></div>
+        <div class="card-bd"><ul class="checklist neg">
+          <li><svg class="i"><use href="/brand/icons.svg#i-circle-alert"/></svg><span>The first passkey enrollment is bootstrapped by whoever holds the admin token. Deliver links over your own authenticated channel.</span></li>
+          <li><svg class="i"><use href="/brand/icons.svg#i-circle-alert"/></svg><span>Admin recovery is time-locked for 72 hours and announced, so a takeover is visible as <code class="inline">RECOVERY</code> in receipts, not prevented.</span></li>
+          <li><svg class="i"><use href="/brand/icons.svg#i-circle-alert"/></svg><span>An anchor proves history as of its time. Detecting a forked history needs someone outside to keep copies of the anchors.</span></li>
+          <li><svg class="i"><use href="/brand/icons.svg#i-circle-alert"/></svg><span>A leaked issuer key stays valid for what it signed before retirement. Rotate promptly, together with the admin token.</span></li>
+          <li><svg class="i"><use href="/brand/icons.svg#i-circle-alert"/></svg><span>AP2 objects are plain JSON claim sets, not SD-JWT, and the cart JWT is unsigned. Merchant authenticity comes from PayPal's API.</span></li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="quickstart">
+  <div class="container two-col">
+    <div class="section-hd" style="margin:0">
+      <span class="eyebrow">Quickstart</span>
+      <h2 class="h2">Running locally <span class="tone">in about five minutes.</span></h2>
+      <p class="lede">Node 22, a PayPal sandbox app and nothing else. SQLite locally; Postgres and Vercel for deployment.</p>
+      <div class="row gap-3 wrap" style="margin-top:8px">
+        <a class="btn btn-secondary" href="https://github.com/Godwin-web3/agentguard#run"><svg class="i"><use href="/brand/icons.svg#i-book-open"/></svg>Full guide</a>
+        <a class="btn btn-ghost" href="https://github.com/Godwin-web3/agentguard#mcp"><svg class="i"><use href="/brand/icons.svg#i-terminal"/></svg>MCP server</a>
+      </div>
+    </div>
+    <div class="stack gap-4">
+      <div class="tabs" role="tablist" aria-label="Quickstart steps">
+        <button role="tab" id="t-run" aria-controls="p-run" aria-selected="true">Run</button>
+        <button role="tab" id="t-pay" aria-controls="p-pay" aria-selected="false" tabindex="-1">Propose</button>
+        <button role="tab" id="t-verify" aria-controls="p-verify" aria-selected="false" tabindex="-1">Verify</button>
+      </div>
+      <div class="code" id="p-run" role="tabpanel" aria-labelledby="t-run">
+        <div class="code-hd"><span>shell</span><button class="btn" type="button" data-copy style="margin-left:auto"><svg class="i i-sm"><use href="/brand/icons.svg#i-copy"/></svg><span>Copy</span></button></div>
+<pre><span class="c"># sandbox credentials only</span>
+git clone https://github.com/Godwin-web3/agentguard && cd agentguard
+npm ci && npm run build:web
+<span class="k">export</span> PAYPAL_CLIENT_ID=… PAYPAL_CLIENT_SECRET=…
+<span class="k">export</span> AGENTGUARD_ADMIN_TOKEN=$(openssl rand -hex 24)
+npm start   <span class="c"># http://localhost:8787/console</span></pre>
+      </div>
+      <div class="code" id="p-pay" role="tabpanel" aria-labelledby="t-pay" hidden>
+        <div class="code-hd"><span>agent → AgentGuard</span><button class="btn" type="button" data-copy style="margin-left:auto"><svg class="i i-sm"><use href="/brand/icons.svg#i-copy"/></svg><span>Copy</span></button></div>
+<pre>curl -X POST localhost:8787/v1/agent/payments \
+  -H <span class="s">"authorization: Bearer $AGENT_KEY"</span> \
+  -H <span class="s">"content-type: application/json"</span> \
+  -d <span class="s">'{"agent_id":"agt_…","mandate_id":"mdt_…",
+       "paypal_order_id":"8FF9…","idempotency_key":"order-8110"}'</span>
+<span class="c"># → { "decision": "needs_human", "approval_id": "apr_…" }</span></pre>
+      </div>
+      <div class="code" id="p-verify" role="tabpanel" aria-labelledby="t-verify" hidden>
+        <div class="code-hd"><span>anyone, offline</span><button class="btn" type="button" data-copy style="margin-left:auto"><svg class="i i-sm"><use href="/brand/icons.svg#i-copy"/></svg><span>Copy</span></button></div>
+<pre>curl https://agentguard-orcin.vercel.app/.well-known/agentguard-keys \
+  &gt; keys.json   <span class="c"># pin this</span>
+npx intent-verify receipt.json --issuer-keys keys.json
+<span class="c"># VALID · passkey ✓ · issuer ✓ · 2 × RFC 3161 ✓ · anchor ✓</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+<!--#include footer-->
+<script type="module" src="/assets/site.js"></script>
+</body>
+</html>

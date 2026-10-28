@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!--#include head-->
+<title>Console · AgentGuard</title>
+<meta name="description" content="AgentGuard operator console: mandates, held payments, passkey approvals, recovery and the audit ledger.">
+<meta name="robots" content="noindex">
+</head>
+<body>
+<div class="toast" id="toasts" role="status" aria-live="polite"></div>
+
+<section class="connect" id="connectView" aria-labelledby="connectTitle">
+  <div class="card">
+    <div class="card-bd stack gap-6" style="padding:28px">
+      <a class="logo" href="/" aria-label="AgentGuard home"><!--#include logo-->AgentGuard</a>
+      <div class="stack gap-2">
+        <h1 class="h3" id="connectTitle">Connect to the console</h1>
+        <p class="small muted">Paste the operator token for this deployment. It stays in this tab's session storage and is sent only to this origin.</p>
+      </div>
+      <form class="stack gap-4" id="connectForm" novalidate>
+        <div class="field">
+          <label class="label" for="token">Admin token</label>
+          <input class="input mono" id="token" type="password" autocomplete="off" spellcheck="false" placeholder="ag_admin_…" required>
+        </div>
+        <div class="alert alert-danger" id="connectErr" role="alert" hidden><svg class="i"><use href="/brand/icons.svg#i-circle-alert"/></svg><p></p></div>
+        <button class="btn btn-primary" id="connect" type="submit"><svg class="i"><use href="/brand/icons.svg#i-key-round"/></svg>Connect</button>
+      </form>
+      <div class="hr"></div>
+      <p class="xs subtle">The admin token can read and draft, but it cannot authorize spending. Mandates, approvals and revocations need the user's passkey.</p>
+    </div>
+  </div>
+</section>
+
+<div class="app" id="appView" hidden>
+  <aside class="sidebar" aria-label="Console navigation">
+    <a class="logo" href="/" aria-label="AgentGuard home"><!--#include logo-->AgentGuard</a>
+    <nav class="stack gap-1">
+      <a class="side-link" href="#overview" data-view="overview"><svg class="i"><use href="/brand/icons.svg#i-layout-dashboard"/></svg>Overview</a>
+      <a class="side-link" href="#approvals" data-view="overview" data-scroll="approvalsCard"><svg class="i"><use href="/brand/icons.svg#i-inbox"/></svg>Approvals<span class="count" id="navApprovals">0</span></a>
+      <div class="side-sec">Records</div>
+      <a class="side-link" href="#mandates" data-view="mandates"><svg class="i"><use href="/brand/icons.svg#g-mandate"/></svg>Mandates<span class="count" id="navMandates">0</span></a>
+      <a class="side-link" href="#payments" data-view="payments"><svg class="i"><use href="/brand/icons.svg#i-activity"/></svg>Payments<span class="count" id="navPayments">0</span></a>
+      <a class="side-link" href="#recovery" data-view="recovery"><svg class="i"><use href="/brand/icons.svg#i-refresh-cw"/></svg>Recovery<span class="count" id="stuckCount">0</span></a>
+      <a class="side-link" href="#audit" data-view="audit"><svg class="i"><use href="/brand/icons.svg#g-anchor"/></svg>Audit ledger</a>
+      <div class="side-sec">Trust</div>
+      <a class="side-link" href="/receipt"><svg class="i"><use href="/brand/icons.svg#g-receipt"/></svg>Verify a receipt</a>
+      <a class="side-link" href="/.well-known/agentguard-keys"><svg class="i"><use href="/brand/icons.svg#i-key-round"/></svg>Issuer keys</a>
+    </nav>
+    <div class="side-foot">
+      <div class="row gap-2"><span class="badge" id="conn"><span class="dot"></span>connecting</span>
+        <button class="btn btn-ghost btn-icon btn-sm" type="button" data-theme-toggle aria-label="Toggle color theme" style="margin-left:auto"><svg class="i"><use href="/brand/icons.svg#i-sun"/></svg></button>
+        <button class="btn btn-ghost btn-icon btn-sm" type="button" id="disconnect" aria-label="Disconnect"><svg class="i"><use href="/brand/icons.svg#i-log-out"/></svg></button></div>
+    </div>
+  </aside>
+
+  <div class="stack" style="min-width:0">
+    <header class="topbar">
+      <h1 id="viewTitle">Overview</h1>
+      <div class="row gap-2" style="margin-left:auto">
+        <label class="sr-only" for="user">Acting for user</label>
+        <div class="row gap-2 user-pick"><svg class="i subtle"><use href="/brand/icons.svg#i-user-round"/></svg>
+          <input class="input input-sm mono" id="user" value="demo-user" autocomplete="off" spellcheck="false" aria-describedby="pkState"></div>
+        <span class="badge" id="pkState"><span class="dot"></span>passkey: …</span>
+        <button class="btn btn-secondary btn-sm" type="button" id="pkCreate"><svg class="i"><use href="/brand/icons.svg#i-fingerprint"/></svg><span class="hide-sm">Enroll passkey</span></button>
+        <button class="btn btn-ghost btn-sm hide-sm" type="button" id="pkLink"><svg class="i"><use href="/brand/icons.svg#i-link"/></svg>Enrollment link</button>
+      </div>
+    </header>
+    <nav class="mobile-tabs" aria-label="Console sections">
+      <a href="#overview" data-view="overview">Overview</a><a href="#mandates" data-view="mandates">Mandates</a><a href="#payments" data-view="payments">Payments</a>
+      <a href="#recovery" data-view="recovery">Recovery</a><a href="#audit" data-view="audit">Audit</a>
+      <button class="btn btn-ghost btn-sm" type="button" data-theme-toggle aria-label="Toggle color theme" style="margin-left:auto"><svg class="i"><use href="/brand/icons.svg#i-sun"/></svg></button>
+    </nav>
+
+    <main class="page" id="main">
+      <div class="alert alert-danger" id="loadErr" role="alert" hidden><svg class="i"><use href="/brand/icons.svg#i-circle-alert"/></svg><div class="stack gap-1"><b>Could not load data</b><p></p></div></div>
+      <div class="card stack" id="enrollPanel" hidden>
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-link"/></svg><h2>Single-use enrollment link</h2>
+          <button class="btn btn-ghost btn-icon btn-sm" type="button" id="enrollClose" aria-label="Close" style="margin-left:auto"><svg class="i"><use href="/brand/icons.svg#i-x"/></svg></button></div>
+        <div class="card-bd stack gap-3"><p class="small muted" id="enrollMeta"></p>
+          <div class="row gap-2"><input class="input mono grow" id="enrollUrl" readonly><button class="btn btn-secondary" type="button" data-copy="enrollUrl"><svg class="i"><use href="/brand/icons.svg#i-copy"/></svg><span>Copy</span></button></div>
+          <p class="xs subtle">Send it to the user over a channel you already trust. Opening it registers their passkey; it works once.</p></div>
+      </div>
+
+      <!-- Overview -->
+      <section class="stack gap-6" data-panel="overview" aria-label="Overview">
+        <div class="stats">
+          <div class="card stat"><div class="xs subtle">Active mandates</div><div class="v" id="stActive"><span class="skel" style="width:40px;height:22px"></span></div></div>
+          <div class="card stat"><div class="xs subtle">Waiting on you</div><div class="v" id="stHeld"><span class="skel" style="width:40px;height:22px"></span></div></div>
+          <div class="card stat"><div class="xs subtle">Captured</div><div class="v" id="stCaptured"><span class="skel" style="width:90px;height:22px"></span></div></div>
+          <div class="card stat"><div class="xs subtle">Audit chain</div><div class="v" style="font-size:15px;margin-top:10px"><span class="badge" id="chain"><span class="dot"></span>checking</span></div></div>
+        </div>
+        <div class="cols">
+          <div class="card" id="approvalsCard">
+            <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-inbox"/></svg><h2>Approval inbox</h2><span class="badge" id="apCount" style="margin-left:auto">0</span></div>
+            <div id="approvals" aria-live="polite"><div class="approval stack gap-3"><span class="skel" style="width:40%"></span><span class="skel" style="width:75%"></span><span class="skel" style="width:60%"></span></div></div>
+          </div>
+          <div class="card">
+            <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#g-mandate"/></svg><h2>New mandate</h2><span class="xs subtle" style="margin-left:auto">drafted, then signed by passkey</span></div>
+            <form class="card-bd stack gap-4" id="draftForm">
+              <div class="field"><label class="label" for="text">What may the agent buy?</label>
+                <textarea class="textarea" id="text" placeholder="Buy one laptop under $900 this week, only from store@bestlaptops.example. Ask me over $600."></textarea>
+                <span class="hint">Plain language. Nothing is active until you review the exact mandate and sign it with your passkey.</span></div>
+              <div class="row gap-3 wrap"><div class="field grow" style="min-width:160px"><label class="label" for="agent">Agent</label><input class="input mono" id="agent" value="shopper" autocomplete="off"></div>
+                <button class="btn btn-primary" id="draft" type="submit" style="align-self:flex-end">Draft mandate</button></div>
+              <div id="draftOut"></div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" data-panel="mandates" aria-label="Mandates" hidden>
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#g-mandate"/></svg><h2>Mandates</h2><span class="xs subtle" style="margin-left:auto">Signing and revoking use the user's passkey</span></div>
+        <div class="table-wrap" id="gMandates"></div>
+      </section>
+      <section class="card" data-panel="payments" aria-label="Payments" hidden>
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-activity"/></svg><h2>Payments</h2><span class="xs subtle" style="margin-left:auto">Newest first</span></div>
+        <div class="table-wrap" id="gPayments"></div>
+      </section>
+      <section class="card" data-panel="recovery" aria-label="Recovery" hidden>
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-refresh-cw"/></svg><h2>Stuck payments</h2>
+          <button class="btn btn-secondary btn-sm" type="button" id="recover" style="margin-left:auto"><svg class="i"><use href="/brand/icons.svg#i-refresh-cw"/></svg>Recover now</button></div>
+        <p class="small muted" style="padding:12px 16px 0">Payments left mid-flight by a crash or timeout. Recovery reconciles each with PayPal and never captures against an inactive mandate.</p>
+        <div class="table-wrap" id="gStuck"></div>
+      </section>
+      <section class="card" data-panel="audit" aria-label="Audit ledger" hidden>
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#g-anchor"/></svg><h2>Audit ledger</h2>
+          <button class="btn btn-secondary btn-sm" type="button" id="verify" style="margin-left:auto"><svg class="i"><use href="/brand/icons.svg#i-list-checks"/></svg>Verify chain</button></div>
+        <div class="table-wrap" id="gAudit"></div>
+      </section>
+    </main>
+  </div>
+</div>
+<script type="module" src="/assets/console.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-import { SUPABASE_ROOT_CA_2021 } from "./supabase-ca.js";
+import { SUPABASE_ROOT_CA_2021 } from "./supabase-ca.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";

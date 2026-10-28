@@ -13,7 +13,7 @@ const cdp = await page.context().newCDPSession(page);
 await cdp.send("WebAuthn.enable");
 await cdp.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true } });
 page.on("dialog", d => d.accept());
-await page.goto(BASE + "/");
+await page.goto(BASE + "/console");
 await page.fill("#token", TOKEN); await page.click("#connect");
 await page.fill("#user", user); await page.dispatchEvent("#user", "change");
 await page.click("#pkCreate");
