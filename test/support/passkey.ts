@@ -11,7 +11,8 @@ export async function enrol(store: Store, users: string[] = ["u1"]) {
   const auths = new Map<string, SoftAuthenticator>();
   for (const u of users) {
     const a = new SoftAuthenticator(RP.rpID, RP.origin);
-    await passkeys.verifyRegistration(u, a.register(await passkeys.registrationOptions(u)) as any);
+    const { token } = passkeys.issueEnrollment(u, { issuedBy: "test" });
+    await passkeys.verifyRegistration(token, a.register(await passkeys.registrationOptions(token)) as any);
     auths.set(u, a);
   }
   return { passkeys, auths };
@@ -26,4 +27,9 @@ export async function revoker(gw: Gateway, auths: Map<string, SoftAuthenticator>
   const req = await gw.revocationRequest(mandateId);
   const sm = await gw.mandateView(mandateId);
   return gw.revokeMandate(mandateId, auths.get(sm.mandate.user_id)!.assert(req.options.challenge) as any);
+}
+/** The user's passkey signs the approval statement for a held payment (approve or deny). */
+export async function approver(gw: Gateway, auths: Map<string, SoftAuthenticator>, approvalId: string, approve = true, who = "user") {
+  const req = await gw.approvalRequest(approvalId, approve);
+  return gw.resolveApproval(approvalId, approve, auths.get(req.statement.user_id)!.assert(req.options.challenge) as any, who);
 }

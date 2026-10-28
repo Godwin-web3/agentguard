@@ -44,7 +44,7 @@
         <input id="user" placeholder="user_id" value="demo-user" style="flex:1">
         <input id="agent" placeholder="agent_id" value="shopper" style="flex:1">
       </div>
-      <div class="row2" style="margin-top:8px"><span id="pkState" class="pill">passkey: —</span><button class="ghost" id="pkCreate">Create passkey</button></div>
+      <div class="row2" style="margin-top:8px"><span id="pkState" class="pill">passkey: —</span><button class="ghost" id="pkCreate">Enroll passkey</button><button class="ghost" id="pkLink">Enrollment link</button></div>
       <p class="mute">Say what the agent may buy. AI drafts it; you sign the exact mandate with your passkey. The server cannot sign for you.</p>
       <textarea id="text" placeholder="Buy one laptop under $900 this week, only from store@bestlaptops.example. Ask me over $600."></textarea>
       <div class="row2"><button id="draft">Draft mandate</button></div>
@@ -140,7 +140,7 @@ function renderApprovals(list) {
   }).join("");
   document.querySelectorAll("[data-ap]").forEach(b => b.onclick = async () => {
     b.disabled = true;
-    try { await api(`/v1/approvals/${b.dataset.ap}`, { method: "POST", body: JSON.stringify({ approve: b.dataset.v === "1", approver: "console" }) }); }
+    try { await signedDecision(b.dataset.ap, b.dataset.v === "1"); }
     catch (e) { alert(e.message); } refresh();
   });
 }
@@ -168,30 +168,46 @@ async function passkeyRefresh() {
     $("#pkState").className = "pill " + (r.registered ? "ok" : "warn"); $("#pkState").textContent = r.registered ? "passkey: registered" : "passkey: none";
     $("#pkCreate").disabled = r.registered; } catch {}
 }
-$("#pkCreate").onclick = async () => {
-  try {
-    const u = encodeURIComponent($("#user").value);
-    const o = await api(`/v1/users/${u}/passkey/options`, { method: "POST" });
+// Enrollment: a passkey can only be registered by redeeming a single-use, short-lived enrollment token.
+async function enrollWith(token) {
+    const o = await api(`/v1/enroll/options`, { method: "POST", body: JSON.stringify({ token }) });
+    if (o.replaces && !confirm(`This link REPLACES the existing passkey for ${o.user_id}. Continue?`)) return;
     const cred = await navigator.credentials.create({ publicKey: { ...o, challenge: b64uToBuf(o.challenge), user: { ...o.user, id: b64uToBuf(o.user.id) },
       excludeCredentials: (o.excludeCredentials || []).map(c => ({ ...c, id: b64uToBuf(c.id) })) } });
     const response = { id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults(),
       authenticatorAttachment: cred.authenticatorAttachment, response: { clientDataJSON: bufToB64u(cred.response.clientDataJSON),
         attestationObject: bufToB64u(cred.response.attestationObject), transports: cred.response.getTransports ? cred.response.getTransports() : [] } };
-    await api(`/v1/users/${u}/passkey`, { method: "POST", body: JSON.stringify({ response }) });
-  } catch (e) { alert(e.message); }
-  passkeyRefresh();
-};
+    await api(`/v1/enroll`, { method: "POST", body: JSON.stringify({ token, response }) });
+}
+const issueLink = () => api(`/v1/users/${encodeURIComponent($("#user").value)}/enrollments`, { method: "POST", body: JSON.stringify({ issued_by: "console" }) });
+$("#pkCreate").onclick = async () => { try { await enrollWith((await issueLink()).token); } catch (e) { alert(e.message); } passkeyRefresh(); };
+$("#pkLink").onclick = async () => { try { const t = await issueLink();
+  prompt(`Single-use enrollment link for ${t.user_id} (expires ${new Date(t.expires_at).toLocaleTimeString()}${t.replaces ? "; REPLACES the current passkey, logged" : ""}):`, t.link); } catch (e) { alert(e.message); } };
+// Opening an enrollment link (#enroll=<token>) redeems it; no admin token needed.
+if (location.hash.startsWith("#enroll=")) { const t = decodeURIComponent(location.hash.slice(8)); history.replaceState(null, "", location.pathname);
+  setTimeout(async () => { try { await enrollWith(t); alert("Passkey enrolled."); } catch (e) { alert(e.message); } passkeyRefresh(); }, 0); }
 async function assertWith(o) {
   const a = await navigator.credentials.get({ publicKey: { ...o, challenge: b64uToBuf(o.challenge), allowCredentials: (o.allowCredentials || []).map(c => ({ ...c, id: b64uToBuf(c.id) })) } });
   return { id: a.id, rawId: bufToB64u(a.rawId), type: a.type, clientExtensionResults: a.getClientExtensionResults(), authenticatorAttachment: a.authenticatorAttachment,
     response: { clientDataJSON: bufToB64u(a.response.clientDataJSON), authenticatorData: bufToB64u(a.response.authenticatorData), signature: bufToB64u(a.response.signature),
       userHandle: a.response.userHandle ? bufToB64u(a.response.userHandle) : undefined } };
 }
+const canon = v => v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? "[" + v.map(canon).join(",") + "]"
+  : "{" + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+/** Approve/deny a held payment: the passkey signs sha256("agentguard:approval:v1:"+canonical(statement)), checked locally first. */
+async function signedDecision(id, approve) {
+  const r = await api(`/v1/approvals/${id}/request`, { method: "POST", body: JSON.stringify({ approve }) });
+  const st = r.statement;
+  const dig = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("agentguard:approval:v1:" + canon(st))));
+  if (bufToB64u(dig) !== r.options.challenge) throw new Error("challenge does not match the approval statement: refusing to sign");
+  if (st.approval_id !== id || st.decision !== (approve ? "approve" : "deny")) throw new Error("statement does not match this decision: refusing to sign");
+  if (!confirm(`${approve ? "APPROVE" : "DENY"} with your passkey?\n\n${(st.amount_minor / 100).toFixed(2)} ${st.currency}\nPayPal order ${st.paypal_order_id ?? "(direct)"}\npayment ${st.payment_id}\nexpires ${st.expires_at}`)) return;
+  const assertion = await assertWith(r.options);
+  await api(`/v1/approvals/${id}`, { method: "POST", body: JSON.stringify({ approve, assertion, approver: "console" }) });
+}
 /** Shows the exact mandate JSON, checks its hash locally, then has the passkey sign that hash (it is the WebAuthn challenge). */
 async function reviewAndSign(id, alreadyReviewed = false) {
   const r = await api(`/v1/mandates/${id}/sign-request`, { method: "POST" });
-  const canon = v => v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? "[" + v.map(canon).join(",") + "]"
-    : "{" + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
   const local = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canon(r.mandate))))].map(b => b.toString(16).padStart(2, "0")).join("");
   if (local !== r.mandate_hash) throw new Error("mandate hash mismatch: refusing to sign");
   if (bufToB64u(Uint8Array.from(local.match(/../g), h => parseInt(h, 16))) !== r.options.challenge) throw new Error("challenge is not this mandate's hash: refusing to sign");

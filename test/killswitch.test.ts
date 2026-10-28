@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { order, setup, pay } from "./support/orders.ts";
+import { order, setup, pay, approver } from "./support/orders.ts";
 import { lazyPayPalRail } from "../src/paypal.ts";
 
 const item = [{ name: "Laptop stand", sku: "STAND-1", category: "PHYSICAL_GOODS", quantity: 1, unit: "30.00" }];
 
 test("operator pause blocks all new payments and approvals; resume restores; both audited", async () => {
-  const { gw, rail, store, mid } = await setup({ require_human_approval_over: "50.00" });
+  const { gw, rail, store, mid, auths } = await setup({ require_human_approval_over: "50.00" });
   rail.orders.set("ORDERBIG001", order("ORDERBIG001", [{ ...item[0], unit: "60.00" }]));
   const held = await gw.propose("shopper", pay(mid, "ORDERBIG001") as any);
   assert.equal(held.status, "needs_human");
@@ -15,7 +15,7 @@ test("operator pause blocks all new payments and approvals; resume restores; bot
   assert.equal(gw.pauseState().paused, true);
   rail.orders.set("ORDERP00001", order("ORDERP00001", item));
   await assert.rejects(gw.propose("shopper", pay(mid, "ORDERP00001") as any), (e: any) => e.code === 503 && /paused by operator: incident #1/.test(e.message));
-  await assert.rejects(gw.resolveApproval(held.approval_id!, true, "owner"), /paused/);
+  await assert.rejects(approver(gw, auths, held.approval_id!, true, "owner"), /paused/);
   assert.ok(!rail.calls.some(c => c.startsWith("authorizeOrder") || c.startsWith("capture")), "no money moved while paused");
   gw.resume("ops");
   const r = await gw.propose("shopper", pay(mid, "ORDERP00001") as any);

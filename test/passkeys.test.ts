@@ -93,18 +93,21 @@ test("drafts can be discarded without a signature (they carry no authority)", as
   assert.equal((await gw.mandateView(mid)).status, "revoked");
 });
 
-test("one passkey per user: a second registration (admin re-keying the user) is refused", async () => {
-  const { passkeys } = await setup();
-  await assert.rejects(passkeys.registrationOptions("u1"), /already has a passkey/);
+test("no trust-on-first-use: registration without a valid enrollment token is refused", async () => {
+  const store = new Store(":memory:"); const pk = new PasskeyService(store, RP);
+  await assert.rejects(pk.registrationOptions("u1"), /invalid enrollment token/);
+  await assert.rejects(pk.registrationOptions(""), /invalid enrollment token/);
 });
 
 test("registration challenge is single-use and bound to the user", async () => {
   const store = new Store(":memory:"); const pk = new PasskeyService(store, RP);
   const a = new SoftAuthenticator();
-  const opts = await pk.registrationOptions("alice");
-  await assert.rejects(pk.verifyRegistration("bob", a.register(opts) as any), /no pending/);
-  await pk.verifyRegistration("alice", a.register(opts) as any);
-  await assert.rejects(pk.verifyRegistration("alice", a.register(opts) as any), /no pending/);
+  const ta = pk.issueEnrollment("alice"), tb = pk.issueEnrollment("bob");
+  const opts = await pk.registrationOptions(ta.token);
+  await assert.rejects(pk.verifyRegistration(tb.token, a.register(opts) as any), /no pending/);
+  const done = await pk.verifyRegistration(ta.token, a.register(opts) as any);
+  assert.equal(done.user_id, "alice");
+  await assert.rejects(pk.verifyRegistration(ta.token, a.register(opts) as any), /already used/);
 });
 
 test("migration: server-signed legacy mandates become 'unsigned', are not enforced, and re-activate only when the user signs", async () => {

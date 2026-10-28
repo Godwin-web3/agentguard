@@ -6,6 +6,8 @@
  *   node --experimental-strip-types scripts/dev-passkey.ts register <user_id>
  *   node --experimental-strip-types scripts/dev-passkey.ts sign <mandate_id> <user_id>
  *   node --experimental-strip-types scripts/dev-passkey.ts revoke <mandate_id> <user_id>
+ *   node --experimental-strip-types scripts/dev-passkey.ts approve <approval_id> <user_id>   (or: deny)
+ * register issues a single-use enrollment token with the admin token and redeems it (or redeems ENROLL_TOKEN if set).
  * Env: AGENTGUARD_URL (default http://localhost:8787), AGENTGUARD_ADMIN_TOKEN.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -28,8 +30,11 @@ if (cmd === "register") {
   if (st.registered) { if (!existsSync(file(a1))) throw new Error(`${a1} already has a passkey that is not this dev key`); console.log(JSON.stringify({ registered: true, credential_id: st.credential_id })); }
   else {
     const a = new SoftAuthenticator(rpID, origin);
-    const o = await api("POST", `/v1/users/${encodeURIComponent(a1)}/passkey/options`);
-    console.log(JSON.stringify(await api("POST", `/v1/users/${encodeURIComponent(a1)}/passkey`, { response: a.register(o) }))); save(a1, a);
+    const token = process.env.ENROLL_TOKEN || (await api("POST", `/v1/users/${encodeURIComponent(a1)}/enrollments`, { issued_by: "dev-passkey" })).token;
+    const o = await api("POST", `/v1/enroll/options`, { token });
+    if (o.user_id !== a1) throw new Error(`enrollment token is for ${o.user_id}, not ${a1}`);
+    const r = await api("POST", `/v1/enroll`, { token, response: a.register(o) });
+    console.log(JSON.stringify({ credential_id: r.credential_id, user_id: r.user_id, enrollment: r.enrollment })); save(a1, a);
   }
 } else if (cmd === "sign" || cmd === "revoke") {
   const a = load(a2);
@@ -42,4 +47,12 @@ if (cmd === "register") {
     console.log(JSON.stringify({ status: v.status }));
   }
   save(a2, a);
-} else { console.error("usage: register <user> | sign <mandate> <user> | revoke <mandate> <user>"); process.exit(2); }
+} else if (cmd === "approve" || cmd === "deny") {
+  const a = load(a2); const approve = cmd === "approve";
+  const r = await api("POST", `/v1/approvals/${a1}/request`, { approve });
+  if (r.statement.user_id !== a2) throw new Error(`approval belongs to ${r.statement.user_id}`);
+  console.error(`signing: ${r.statement.decision} ${r.statement.amount_minor / 100} ${r.statement.currency} order ${r.statement.paypal_order_id} payment ${r.statement.payment_id}`);
+  const v = await api("POST", `/v1/approvals/${a1}`, { approve, assertion: a.assert(r.options.challenge), approver: `${a2} (dev-passkey)` });
+  save(a2, a);
+  console.log(JSON.stringify({ payment_id: v.payment_id, status: v.status, paypal: v.paypal ?? null, statement_hash: r.statement_hash }));
+} else { console.error("usage: register <user> | sign <mandate> <user> | revoke <mandate> <user> | approve|deny <approval> <user>"); process.exit(2); }

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { orderFacts } from "../src/order.ts";
 
-import { MERCHANT, order, OrderRail, setup, pay } from "./support/orders.ts";
+import { MERCHANT, order, OrderRail, setup, pay, approver } from "./support/orders.ts";
 
 test("merchant order within the mandate: facts come from PayPal, authorize -> capture", async () => {
   const { gw, rail, mid } = await setup();
@@ -46,13 +46,13 @@ test("agent-declared (vaulted) path: category/sku/quantity limits and require_me
 });
 
 test("order changed by the merchant after evaluation is never authorized", async () => {
-  const { gw, rail, mid, store } = await setup({ require_human_approval_over: "20.00" });
+  const { gw, rail, mid, store, auths } = await setup({ require_human_approval_over: "20.00" });
   rail.orders.set("ORDERCHG001", order("ORDERCHG001", [{ name: "Laptop charger", sku: "CHARGER-65W", category: "PHYSICAL_GOODS", quantity: 1, unit: "45.00" }]));
   const r = await gw.propose("shopper", pay(mid, "ORDERCHG001") as any);
   assert.equal(r.status, "needs_human");
   rail.orders.set("ORDERCHG001", order("ORDERCHG001", [{ name: "Laptop charger", sku: "CHARGER-65W", category: "PHYSICAL_GOODS", quantity: 1, unit: "45.00" }],
     { payee: { merchant_id: "ATTACKER1", email_address: "attacker@evil.example" } }));
-  const done = await gw.resolveApproval(r.approval_id!, true, "owner");
+  const done = await approver(gw, auths, r.approval_id!, true, "owner");
   assert.equal(done.status, "failed"); assert.match(done.error!, /changed after evaluation/);
   assert.ok(!rail.calls.some(c => c.startsWith("authorizeOrder")));
   assert.equal(store.spendState(mid).reserved_minor, 0);
