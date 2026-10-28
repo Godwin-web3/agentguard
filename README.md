@@ -174,6 +174,53 @@ AGENTGUARD_URL=http://localhost:8787 AGENTGUARD_AGENT_KEY=ag_... AGENTGUARD_AGEN
 ```
 Give your agent this server **instead of** direct PayPal payment tools.
 
+## Deploy: Supabase Postgres + Vercel (free tiers)
+
+Storage sits behind one async `Sql` interface (`src/db.ts`): SQLite (`AGENTGUARD_DB`, default) for local runs, Postgres when
+`AGENTGUARD_DATABASE_URL` is a `postgres://` URL. Reserve, verify and capture, idempotency dedup and the audit hash chain run inside
+one transaction holding `pg_advisory_xact_lock` (Postgres) or `BEGIN IMMEDIATE` (SQLite), so they stay atomic across concurrent
+serverless instances. `npm run test:pg` runs the whole suite against Postgres (`AGENTGUARD_TEST_PG=postgres://...`).
+
+**Database.** `db/postgres.sql` creates every table in schema `agentguard`, owned by a dedicated login role `agentguard_app`
+(search_path pinned). Row-level security is on for every table with no policies, so Supabase's `anon`/`authenticated` API roles
+read nothing; only the server, holding the role password, connects. The audit and anchor tables are append-only via triggers.
+TLS to the Supabase pooler (port 6543, transaction mode) is verified against the pinned Supabase root CA.
+
+**Keys never touch the filesystem.** The issuer key ring lives in `issuer_keys`, each private key sealed with AES-256-GCM under
+`AGENTGUARD_KEYRING_KEY` (env secret; kid as AAD). `AGENTGUARD_SIGNING_KEY` (Ed25519 PEM) seeds the first key. Rotation from any
+instance is visible to the others within 10 s.
+
+**Vercel.** `npm run build:vercel` emits Build Output API v3: one Node 22 function (`api/index.ts`) serving every route.
+Production env: `AGENTGUARD_DATABASE_URL`, `AGENTGUARD_ADMIN_TOKEN`, `AGENTGUARD_SIGNING_KEY`, `AGENTGUARD_KEYRING_KEY`,
+`CRON_SECRET`, `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET`/`PAYPAL_API_BASE` (sandbox), `AGENTGUARD_PUBLIC_URL` and
+`AGENTGUARD_RP_ID` (the production domain, which passkeys are bound to), `AGENTGUARD_TSA_URLS`.
+
+**Scheduled jobs.** A serverless function has no timers, so background work is exposed as two routes that require
+`Authorization: Bearer $CRON_SECRET`:
+
+| Route | Does | Schedule |
+| --- | --- | --- |
+| `/api/cron/anchor` | timestamps pending receipts, anchors the audit-chain head with the TSAs | every 15 min |
+| `/api/cron/maintenance` | expires recovery locks, retries failed notifications, converges stuck payments | every 5 min |
+
+Vercel Hobby only allows daily crons, so Vercel runs each once a day as a fallback, and the real schedule comes from
+Supabase `pg_cron` + `pg_net` calling the routes. The secret is kept in Supabase Vault, not in the job text:
+
+```sql
+create extension if not exists pg_cron; create extension if not exists pg_net;
+select vault.create_secret('<CRON_SECRET>', 'agentguard_cron_secret');
+select cron.schedule('agentguard-anchor', '*/15 * * * *', $$
+  select net.http_post(url := 'https://<domain>/api/cron/anchor',
+    headers := jsonb_build_object('Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'agentguard_cron_secret')),
+    timeout_milliseconds := 60000) $$);
+-- same for 'agentguard-maintenance', '*/5 * * * *', /api/cron/maintenance
+```
+
+Run history: `select * from cron.job_run_details order by start_time desc` and `select * from net._http_response`.
+
+**Known limits.** Free Supabase projects pause after a week without traffic (the 5-minute maintenance job keeps it active).
+The Vercel function has a 60 s ceiling, so TSA calls carry short timeouts.
+
 ## License
 Apache-2.0
 
