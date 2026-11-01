@@ -65,6 +65,18 @@ export const DESCRIPTIONS = {
   [STATUS_TOOL]: "Check the status of an AgentGuard payment (e.g. one waiting for the owner's approval).",
 };
 
+/**
+ * MCP tool annotations (behaviour hints for clients and directories), set from what each tool really does.
+ * create_order: writes a new PayPal order (no money moves); every call makes a new order (fresh PayPal-Request-Id), so not idempotent.
+ * pay_order: moves money; a retry for the same order reuses idempotency key `paypal-order-<id>`, so AgentGuard dedupes it.
+ * get_payment_status: read-only lookup.
+ */
+export const ANNOTATIONS = {
+  create_order: { title: "Create PayPal order", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  pay_order: { title: "Pay PayPal order (via AgentGuard)", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  [STATUS_TOOL]: { title: "Get AgentGuard payment status", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+} as const;
+
 const toMinor = (n: number) => Math.round(n * 100);
 const fmt = (m: number) => (m / 100).toFixed(2);
 

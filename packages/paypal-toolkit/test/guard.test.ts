@@ -80,3 +80,32 @@ test("MCP: guarded server lists no refund/dispute tools and routes pay_order thr
   assert.equal(JSON.parse(r.content[0].text).decision, "reject"); assert.equal(calls[0].body.mandate_id, "mdt_1");
   await client.close();
 });
+
+test("MCP: every tool declares all four behaviour annotations as booleans, matching real behaviour", async () => {
+  const server = createGuardedMcpServer(new AiToolkit(toolkitOpts) as any, new PayPalGuard({ ...cfgBase, fetch: fakeFetch().f }, merchant));
+  const [a, b] = InMemoryTransport.createLinkedPair(); const client = new Client({ name: "t", version: "1" });
+  await Promise.all([server.connect(a), client.connect(b)]);
+  const tools = (await client.listTools()).tools;
+  for (const t of tools) for (const k of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const)
+    assert.equal(typeof (t.annotations as any)?.[k], "boolean", `${t.name}.${k}`);
+  const ann = (n: string) => tools.find(t => t.name === n)!.annotations as any;
+  assert.deepEqual([ann("create_order").readOnlyHint, ann("create_order").destructiveHint, ann("create_order").idempotentHint, ann("create_order").openWorldHint], [false, false, false, true]);
+  assert.deepEqual([ann("pay_order").readOnlyHint, ann("pay_order").destructiveHint, ann("pay_order").idempotentHint, ann("pay_order").openWorldHint], [false, true, true, true]);
+  assert.deepEqual([ann("get_payment_status").readOnlyHint, ann("get_payment_status").destructiveHint, ann("get_payment_status").idempotentHint, ann("get_payment_status").openWorldHint], [true, false, true, true]);
+  assert.equal(ann("get_order").readOnlyHint, true);
+  // input schemas still advertised after the Zod 4 move
+  const pay = tools.find(t => t.name === "pay_order")!;
+  assert.deepEqual(pay.inputSchema.required, ["id"]);
+  await client.close();
+});
+
+test("OpenAI + AI SDK: Zod 4 schemas export as JSON Schema and still validate", async () => {
+  const oa = guardOpenAI(new OaToolkit(toolkitOpts), new PayPalGuard({ ...cfgBase, fetch: fakeFetch().f }, merchant));
+  const co: any = oa.getTools().find(t => t.function.name === "create_order")!.function.parameters;
+  assert.equal(co.type, "object"); assert.ok(co.properties.items && co.required.includes("items"));
+  const tools: any = guardTools(new AiToolkit(toolkitOpts) as any, new PayPalGuard({ ...cfgBase, fetch: fakeFetch().f }, merchant));
+  const s = tools.pay_order.inputSchema;
+  assert.equal(s.jsonSchema.properties.id.type, "string");
+  assert.equal((await s.validate({ id: "../x" })).success, false);
+  assert.equal((await s.validate({ id: "5O190127TN364715T" })).success, true);
+});
