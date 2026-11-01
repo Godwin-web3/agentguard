@@ -1,5 +1,6 @@
-import { tool, type Tool } from "ai";
-import { PayPalGuard, READ_ONLY, DESCRIPTIONS, STATUS_TOOL, createOrderSchema, payOrderSchema, statusSchema, type GuardConfig, type MerchantClient } from "./core.ts";
+import { jsonSchema, type Tool } from "ai";
+import { z } from "zod";
+import { PayPalGuard, READ_ONLY, ANNOTATIONS, DESCRIPTIONS, STATUS_TOOL, createOrderSchema, payOrderSchema, statusSchema, type GuardConfig, type MerchantClient } from "./core.ts";
 
 /**
  * Wrap `new PayPalAgentToolkit(...)` from `@paypal/agent-toolkit/ai-sdk`.
@@ -11,9 +12,19 @@ export function guardTools(toolkit: { client: MerchantClient; getTools(): Record
   const g = cfg instanceof PayPalGuard ? cfg : new PayPalGuard(cfg, toolkit.client);
   const out: Record<string, Tool> = {};
   if (opts.readOnly !== false) for (const [name, t] of Object.entries(toolkit.getTools())) if (READ_ONLY.has(name)) out[name] = t;
-  out.create_order = tool({ description: DESCRIPTIONS.create_order, parameters: createOrderSchema, execute: a => g.createOrder(a) });
-  out.pay_order = tool({ description: DESCRIPTIONS.pay_order, parameters: payOrderSchema, execute: a => g.payOrder(a) });
-  out[STATUS_TOOL] = tool({ description: DESCRIPTIONS[STATUS_TOOL], parameters: statusSchema, execute: a => g.paymentStatus(a) });
+  out.create_order = mk(DESCRIPTIONS.create_order, createOrderSchema, a => g.createOrder(a));
+  out.pay_order = mk(DESCRIPTIONS.pay_order, payOrderSchema, a => g.payOrder(a));
+  out[STATUS_TOOL] = mk(DESCRIPTIONS[STATUS_TOOL], statusSchema, a => g.paymentStatus(a));
   return out;
 }
-export { PayPalGuard };
+/**
+ * Build an AI SDK tool from a Zod 4 schema without depending on the SDK's own Zod integration, so it works on AI SDK 4 (`parameters`)
+ * and AI SDK 5 (`inputSchema`). Validation still runs through Zod.
+ */
+function mk(description: string, schema: z.ZodType, execute: (a: any) => Promise<unknown>): Tool {
+  const s = jsonSchema(z.toJSONSchema(schema, { io: "input", unrepresentable: "any" }) as any, {
+    validate: (v: unknown) => { const r = schema.safeParse(v); return r.success ? { success: true, value: r.data } : { success: false, error: r.error }; },
+  });
+  return { type: "function", description, parameters: s, inputSchema: s, execute } as unknown as Tool;
+}
+export { PayPalGuard, ANNOTATIONS };
