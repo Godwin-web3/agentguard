@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { PayPalGuard, READ_ONLY, DESCRIPTIONS, STATUS_TOOL, createOrderSchema, payOrderSchema, statusSchema, type GuardConfig, type MerchantClient } from "./core.ts";
+import { PayPalGuard, READ_ONLY, ANNOTATIONS, DESCRIPTIONS, STATUS_TOOL, createOrderSchema, payOrderSchema, statusSchema, type GuardConfig, type MerchantClient } from "./core.ts";
 
 type AiTool = { description?: string; parameters: any; execute?: (a: any, o: any) => Promise<unknown> };
 
@@ -17,11 +17,12 @@ export function createGuardedMcpServer(toolkit: { client: MerchantClient; getToo
   };
   for (const [name, t] of Object.entries(toolkit.getTools())) {
     if (!READ_ONLY.has(name) || !t.execute) continue;
-    server.tool(name, t.description ?? name, t.parameters.shape, safe(a => t.execute!(a, { toolCallId: "mcp", messages: [] })));
+    server.tool(name, t.description ?? name, t.parameters.shape,
+      { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }, safe(a => t.execute!(a, { toolCallId: "mcp", messages: [] })));
   }
-  server.tool("create_order", DESCRIPTIONS.create_order, createOrderSchema.shape, safe(a => g.createOrder(a)));
-  server.tool("pay_order", DESCRIPTIONS.pay_order, payOrderSchema.shape, safe(a => g.payOrder(a)));
-  server.tool(STATUS_TOOL, DESCRIPTIONS[STATUS_TOOL], statusSchema.shape, safe(a => g.paymentStatus(a)));
+  server.tool("create_order", DESCRIPTIONS.create_order, createOrderSchema.shape, ANNOTATIONS.create_order, safe(a => g.createOrder(a)));
+  server.tool("pay_order", DESCRIPTIONS.pay_order, payOrderSchema.shape, ANNOTATIONS.pay_order, safe(a => g.payOrder(a)));
+  server.tool(STATUS_TOOL, DESCRIPTIONS[STATUS_TOOL], statusSchema.shape, ANNOTATIONS[STATUS_TOOL], safe(a => g.paymentStatus(a)));
   return server;
 }
 export { PayPalGuard };

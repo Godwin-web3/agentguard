@@ -8,6 +8,15 @@ import { createInterface } from "node:readline";
 const BASE = process.env.AGENTGUARD_URL ?? "http://localhost:8787";
 const KEY = process.env.AGENTGUARD_AGENT_KEY ?? "";
 
+/** MCP behaviour hints. Payments are deduped by the agent's idempotency_key, so retries with the same key are idempotent. */
+export const ANNOTATIONS: Record<string, { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean }> = {
+  get_spending_mandate: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  pay_paypal_order: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  propose_payment: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  get_payment_status: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  get_payment_receipt: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+};
+
 const tools = [
   { name: "get_spending_mandate", description: "Read the spending authority the user delegated to you: purpose, limits, allowed categories/payees, remaining budget. Call before shopping.",
     inputSchema: { type: "object", properties: { mandate_id: { type: "string" } }, required: ["mandate_id"] } },
@@ -54,7 +63,7 @@ createInterface({ input: process.stdin }).on("line", async line => {
   const { id, method, params } = msg;
   if (method === "initialize") return out({ jsonrpc: "2.0", id, result: { protocolVersion: params?.protocolVersion ?? "2025-06-18",
     capabilities: { tools: {} }, serverInfo: { name: "agentguard", version: "0.1.0" } } });
-  if (method === "tools/list") return out({ jsonrpc: "2.0", id, result: { tools } });
+  if (method === "tools/list") return out({ jsonrpc: "2.0", id, result: { tools: tools.map(t => ({ ...t, annotations: ANNOTATIONS[t.name] })) } });
   if (method === "tools/call") {
     const r = await callTool(params.name, params.arguments ?? {}, AGENT_ID).catch(e => ({ ok: false, data: { error: String(e) } }));
     return out({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(r.data) }], isError: !r.ok } });
