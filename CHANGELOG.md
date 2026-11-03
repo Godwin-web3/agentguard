@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-03
+
+Security and compatibility release, prompted by the M8ven MCP scan. Republished from CI with npm provenance.
+
+### Security
+- `@agentguard-dev/paypal-toolkit`: upgraded `zod` to 4.x, fixing a high-severity resource-exhaustion advisory in `zod` 3.25.76.
+
+### Changed
+- MCP tools (`create_order`, `pay_order`, `get_payment_status`) now declare all four tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), as required by OpenAI's MCP directory.
+- The toolkit supports Vercel AI SDK 4 and 5. The MCP server reports version 0.1.2.
+
 ## [0.1.1] - 2026-10-28
 
 Packages republished from CI with npm provenance (signed build attestations). Package READMEs updated (badges, install commands, fixed MCP `npx` command). The MCP server reports version 0.1.1. No API changes.
@@ -32,6 +43,7 @@ First public release of `@agentguard-dev/intent-verifier` and `@agentguard-dev/p
 - `@agentguard-dev/paypal-toolkit`: guard for PayPal's Agent Toolkit (Vercel AI SDK, OpenAI, MCP); money moves only through AgentGuard.
 - Supabase Postgres backend and Vercel deployment; owner console, receipt viewer and brand kit.
 
-[Unreleased]: https://github.com/Godwin-web3/agentguard/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Godwin-web3/agentguard/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Godwin-web3/agentguard/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Godwin-web3/agentguard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Godwin-web3/agentguard/releases/tag/v0.1.0
