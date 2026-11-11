@@ -44,7 +44,12 @@
   "timer",
   "user-round",
   "bot",
-  "monitor"
+  "monitor",
+  "search",
+  "download",
+  "shopping-bag",
+  "package-search",
+  "store"
  ],
  "glyphs": [
   "mandate",

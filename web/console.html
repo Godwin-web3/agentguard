@@ -40,6 +40,7 @@
       <div class="side-sec">Records</div>
       <a class="side-link" href="#mandates" data-view="mandates"><svg class="i"><use href="/brand/icons.svg#g-mandate"/></svg>Mandates<span class="count" id="navMandates">0</span></a>
       <a class="side-link" href="#payments" data-view="payments"><svg class="i"><use href="/brand/icons.svg#i-activity"/></svg>Payments<span class="count" id="navPayments">0</span></a>
+      <a class="side-link" href="#receipts" data-view="receipts"><svg class="i"><use href="/brand/icons.svg#g-receipt"/></svg>Receipts<span class="count" id="navReceipts">0</span></a>
       <a class="side-link" href="#recovery" data-view="recovery"><svg class="i"><use href="/brand/icons.svg#i-refresh-cw"/></svg>Recovery<span class="count" id="stuckCount">0</span></a>
       <a class="side-link" href="#audit" data-view="audit"><svg class="i"><use href="/brand/icons.svg#g-anchor"/></svg>Audit ledger</a>
       <div class="side-sec">Trust</div>
@@ -66,7 +67,7 @@
       </div>
     </header>
     <nav class="mobile-tabs" aria-label="Console sections">
-      <a href="#overview" data-view="overview">Overview</a><a href="#mandates" data-view="mandates">Mandates</a><a href="#payments" data-view="payments">Payments</a>
+      <a href="#overview" data-view="overview">Overview</a><a href="#mandates" data-view="mandates">Mandates</a><a href="#payments" data-view="payments">Payments</a><a href="#receipts" data-view="receipts">Receipts</a>
       <a href="#recovery" data-view="recovery">Recovery</a><a href="#audit" data-view="audit">Audit</a>
       <button class="btn btn-ghost btn-sm" type="button" data-theme-toggle aria-label="Toggle color theme" style="margin-left:auto"><svg class="i"><use href="/brand/icons.svg#i-sun"/></svg></button>
     </nav>
@@ -112,9 +113,22 @@
         <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#g-mandate"/></svg><h2>Mandates</h2><span class="xs subtle" style="margin-left:auto">Signing and revoking use the user's passkey</span></div>
         <div class="table-wrap" id="gMandates"></div>
       </section>
-      <section class="card" data-panel="payments" aria-label="Payments" hidden>
-        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-activity"/></svg><h2>Payments</h2><span class="xs subtle" style="margin-left:auto">Newest first</span></div>
-        <div class="table-wrap" id="gPayments"></div>
+      <section class="card grid-card" data-panel="payments" aria-label="Payments" hidden>
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-activity"/></svg><h2>Payments</h2>
+          <div class="grid-tools"><label class="sr-only" for="qPayments">Filter payments</label>
+            <div class="search-in"><svg class="i"><use href="/brand/icons.svg#i-search"/></svg><input class="input input-sm" id="qPayments" type="search" placeholder="Filter payee, order id, status…" autocomplete="off"></div>
+            <button class="btn btn-secondary btn-sm" type="button" id="csvPayments"><svg class="i"><use href="/brand/icons.svg#i-download"/></svg>CSV</button></div></div>
+        <p class="grid-note xs subtle">Every proposal and its deterministic decision. PayPal order and capture ids come from PayPal, not the agent. Click a row for the full record and its signed receipt.</p>
+        <div class="grid-box" id="gPayments"></div>
+      </section>
+      <section class="card grid-card" data-panel="receipts" aria-label="Receipts" hidden>
+        <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#g-receipt"/></svg><h2>Proof-of-Intent receipts</h2>
+          <span class="badge" id="rcSummary"><span class="dot"></span>verifying</span>
+          <div class="grid-tools"><label class="sr-only" for="qReceipts">Filter receipts</label>
+            <div class="search-in"><svg class="i"><use href="/brand/icons.svg#i-search"/></svg><input class="input input-sm" id="qReceipts" type="search" placeholder="Filter receipt, capture, payee…" autocomplete="off"></div>
+            <button class="btn btn-secondary btn-sm" type="button" id="csvReceipts"><svg class="i"><use href="/brand/icons.svg#i-download"/></svg>Dispute evidence CSV</button></div></div>
+        <p class="grid-note xs subtle">Each receipt is re-verified in this browser: Ed25519 issuer signature against <a class="link" href="/.well-known/agentguard-keys">the published key set</a>, the user's passkey signature over the mandate, and the PayPal order digest.</p>
+        <div class="grid-box" id="gReceipts"></div>
       </section>
       <section class="card" data-panel="recovery" aria-label="Recovery" hidden>
         <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#i-refresh-cw"/></svg><h2>Stuck payments</h2>
@@ -122,14 +136,25 @@
         <p class="small muted" style="padding:12px 16px 0">Payments left mid-flight by a crash or timeout. Recovery reconciles each with PayPal and never captures against an inactive mandate.</p>
         <div class="table-wrap" id="gStuck"></div>
       </section>
-      <section class="card" data-panel="audit" aria-label="Audit ledger" hidden>
+      <section class="card grid-card" data-panel="audit" aria-label="Audit ledger" hidden>
         <div class="card-hd"><svg class="i"><use href="/brand/icons.svg#g-anchor"/></svg><h2>Audit ledger</h2>
-          <button class="btn btn-secondary btn-sm" type="button" id="verify" style="margin-left:auto"><svg class="i"><use href="/brand/icons.svg#i-list-checks"/></svg>Verify chain</button></div>
-        <div class="table-wrap" id="gAudit"></div>
+          <span class="badge" id="auSummary"><span class="dot"></span>checking</span>
+          <div class="grid-tools"><label class="sr-only" for="qAudit">Filter audit entries</label>
+            <div class="search-in"><svg class="i"><use href="/brand/icons.svg#i-search"/></svg><input class="input input-sm" id="qAudit" type="search" placeholder="Filter event, ref, hash…" autocomplete="off"></div>
+            <button class="btn btn-secondary btn-sm" type="button" id="csvAudit"><svg class="i"><use href="/brand/icons.svg#i-download"/></svg>CSV</button>
+            <button class="btn btn-secondary btn-sm" type="button" id="verify"><svg class="i"><use href="/brand/icons.svg#i-list-checks"/></svg>Verify chain</button></div></div>
+        <p class="grid-note xs subtle">Append-only and hash-chained. The Chain column recomputes sha256(prev | ts | event | ref | payload) for every row in this browser; it does not trust the server's answer.</p>
+        <div class="grid-box" id="gAudit"></div>
       </section>
     </main>
   </div>
 </div>
+<div class="drawer-scrim" id="drawerScrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" hidden>
+  <div class="card-hd"><svg class="i" id="drawerIcon"><use href="/brand/icons.svg#g-receipt"/></svg><h2 id="drawerTitle">Record</h2>
+    <button class="btn btn-ghost btn-icon btn-sm" type="button" id="drawerClose" aria-label="Close" style="margin-left:auto"><svg class="i"><use href="/brand/icons.svg#i-x"/></svg></button></div>
+  <div class="drawer-bd" id="drawerBody"></div>
+</aside>
 <script type="module" src="/assets/console.js"></script>
 </body>
 </html>

@@ -28,6 +28,7 @@
     "@noble/hashes": "^2.4.0",
     "@types/node": "^22.20.5",
     "@types/pg": "^8.23.1",
+    "ag-grid-community": "^36.3.0",
     "buffer": "^6.0.3",
     "esbuild": "^0.28.2",
     "eslint": "^10.13.0",
