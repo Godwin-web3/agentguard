@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 // Channel3 product discovery: mandate-bounded search, the agent route, and the catalog reference price as an
 // escalate-only risk signal on PayPal orders. A local fake stands in for api.trychannel3.com.
 import { test } from "node:test";
@@ -105,14 +106,20 @@ test("catalog price: PayPal order at market price is paid; overpriced vs Channel
 
 test("agent route: search is bounded by the mandate's remaining budget, audited, and scoped to the agent's own mandate", async () => {
   const f = await fakeChannel3();
-  const saved = { k: process.env.CHANNEL3_API_KEY, u: process.env.CHANNEL3_BASE_URL };
+  const saved = { k: process.env.CHANNEL3_API_KEY, u: process.env.CHANNEL3_BASE_URL, r: process.env.AGENTGUARD_KEYRING_KEY, sk: process.env.AGENTGUARD_SIGNING_KEY };
   process.env.CHANNEL3_API_KEY = "c3_test_key"; process.env.CHANNEL3_BASE_URL = f.url; process.env.AGENTGUARD_ADMIN_TOKEN ??= "x".repeat(32);
-  const w = await world(f.url, "plain");
-  const { createApp } = await import("../src/app.ts");
-  const app = await createApp({ sql: w.sql, background: false });
-  const srv = createServer((q, r) => void app.handler(q, r)).listen(0);
+  // On Postgres (CI) the app keeps its issuer keys in the database key ring, which needs a wrapping key.
+  process.env.AGENTGUARD_KEYRING_KEY ??= "catalog-test-keyring-key-0123456789abcdef";
+  process.env.AGENTGUARD_SIGNING_KEY ??= generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  let app: Awaited<ReturnType<typeof import("../src/app.ts")["createApp"]>> | undefined;
+  let srv: ReturnType<typeof createServer> | undefined;
   try {
-    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const w = await world(f.url, "plain");
+    const { createApp } = await import("../src/app.ts");
+    const a = app = await createApp({ sql: w.sql, background: false });
+    const s = srv = createServer((q, r) => void a.handler(q, r)).listen(0);
+    await new Promise(ok => s.once("listening", ok));
+    const base = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
     const post = (path: string, key: string, body: unknown) => fetch(base + path, { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(body) });
     const r = await post("/v1/agent/products/search", w.agentKey, { mandate_id: w.mid, query: "laptop stand" });
     assert.equal(r.status, 200);
@@ -129,7 +136,9 @@ test("agent route: search is bounded by the mandate's remaining budget, audited,
     assert.equal((await post("/v1/agent/products/search", other.api_key, { mandate_id: w.mid, query: "x" })).status, 404);
     assert.equal((await post("/v1/agent/products/search", w.agentKey, { mandate_id: w.mid, query: "" })).status, 400);
   } finally {
-    srv.close(); f.close(); await app.close();
+    srv?.close(); f.close(); await app?.close();
+    if (saved.sk === undefined) delete process.env.AGENTGUARD_SIGNING_KEY; else process.env.AGENTGUARD_SIGNING_KEY = saved.sk;
+    if (saved.r === undefined) delete process.env.AGENTGUARD_KEYRING_KEY; else process.env.AGENTGUARD_KEYRING_KEY = saved.r;
     if (saved.k === undefined) delete process.env.CHANNEL3_API_KEY; else process.env.CHANNEL3_API_KEY = saved.k;
     if (saved.u === undefined) delete process.env.CHANNEL3_BASE_URL; else process.env.CHANNEL3_BASE_URL = saved.u;
   }
