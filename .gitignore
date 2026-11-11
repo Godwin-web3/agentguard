@@ -9,3 +9,4 @@ packages/*/dist/
 .vercel
 !.env.example
 !test/fixtures/tsa/*.pem
+apimatic/portal/

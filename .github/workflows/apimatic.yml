@@ -1,0 +1,38 @@
+name: APIMatic
+# Validates the OpenAPI spec with APIMatic and builds the SDKs and the API portal from apimatic/src.
+# Needs the repository secret APIMATIC_API_KEY (APIMatic dashboard > Account > API keys); skipped without it.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["docs/openapi.mjs", "apimatic/**", ".github/workflows/apimatic.yml"]
+permissions: { contents: read }
+jobs:
+  apimatic:
+    runs-on: ubuntu-latest
+    env:
+      APIMATIC_API_KEY: ${{ secrets.APIMATIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Spec is in sync with docs/openapi.mjs
+        run: node scripts/apimatic-spec.mjs && git diff --exit-code apimatic/src/spec/openapi.json
+      - name: No APIMatic key
+        if: env.APIMATIC_API_KEY == ''
+        run: echo "::notice::Set the APIMATIC_API_KEY secret to validate the spec and generate SDKs and the portal with APIMatic."
+      - name: Validate (APIMatic)
+        if: env.APIMATIC_API_KEY != ''
+        run: npx -y @apimatic/cli@2 api validate --file apimatic/src/spec/openapi.json --auth-key "$APIMATIC_API_KEY"
+      - name: Generate SDKs (TypeScript, Python)
+        if: env.APIMATIC_API_KEY != ''
+        run: |
+          for l in typescript python; do
+            npx -y @apimatic/cli@2 sdk generate --input apimatic --language $l --destination apimatic/sdk/$l --force --auth-key "$APIMATIC_API_KEY"
+          done
+      - name: Generate API portal
+        if: env.APIMATIC_API_KEY != ''
+        run: npx -y @apimatic/cli@2 portal generate --input apimatic --destination apimatic/portal --force --auth-key "$APIMATIC_API_KEY"
+      - uses: actions/upload-artifact@v4
+        if: env.APIMATIC_API_KEY != ''
+        with: { name: agentguard-apimatic, path: "apimatic/sdk\napimatic/portal", if-no-files-found: error }

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://cdn.jsdelivr.net/npm/@apimatic/cli@2/apimatic.schema.json",
+  "schemaVersion": 1,
+  "portal": {
+    "site": {
+      "name": "AgentGuard API",
+      "description": "Financial authorization gateway for AI agents paying through PayPal: passkey-signed spending mandates enforced before any money moves, with signed Proof-of-Intent receipts."
+    },
+    "brand": {
+      "logo": { "light": "static/images/logo-light.svg", "dark": "static/images/logo-dark.svg" },
+      "favicon": "static/images/favicon.svg",
+      "colors": { "primary": { "light": "#2F4BD6", "dark": "#7B90FF" } },
+      "colorMode": "both"
+    },
+    "navigation": {
+      "links": [
+        { "label": "Live demo", "url": "https://agentguard-orcin.vercel.app" },
+        { "label": "Docs", "url": "https://agentguard-orcin.vercel.app/docs" },
+        { "label": "GitHub", "url": "https://github.com/Godwin-web3/agentguard" }
+      ]
+    }
+  },
+  "plugin": {
+    "pluginId": "agentguard",
+    "pluginName": "AgentGuard",
+    "pluginVersion": "0.2.0",
+    "license": "Apache-2.0",
+    "homepage": "https://agentguard-orcin.vercel.app",
+    "repository": "https://github.com/Godwin-web3/agentguard"
+  },
+  "languages": { "typescript": {}, "python": {}, "csharp": {} }
+}
