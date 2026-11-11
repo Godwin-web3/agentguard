@@ -4,7 +4,8 @@
  * Used for screenshots and for trying the AG Grid views without a sandbox account.
  *
  *   node --experimental-strip-types --no-warnings scripts/demo-console.ts      # then open http://localhost:8787/console
- * Env: PORT (8787), AGENTGUARD_ADMIN_TOKEN (default: a fixed local-only demo token printed at start).
+ * Env: PORT (8787), AGENTGUARD_ADMIN_TOKEN (default: a fixed local-only demo token printed at start), CHANNEL3_API_KEY
+ * (optional: real Channel3 product search in the console; without it the Product search view says it is not configured).
  */
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
@@ -38,16 +39,15 @@ const d = await gw.draftMandate({ user_id: "demo-user", agent_id: "shopper", pur
 await signer(gw, auths)(d.mandate.mandate_id, d.mandate_hash);
 const mid = d.mandate.mandate_id;
 const orders: [string, any[], any?][] = [
-  ["7XK21934BD551204R", [{ name: "Aluminium laptop stand", sku: "channel3:Lp8fQ2x", category: "PHYSICAL_GOODS", quantity: 1, unit: "39.00" }], { tax: 300 }],
-  ["2HW88310JS0174523", [{ name: "Anker 65W USB-C charger", sku: "channel3:9vTn4Kd", category: "PHYSICAL_GOODS", quantity: 1, unit: "35.99" }]],
-  ["5TY40012MV9930118", [{ name: "USB-C to USB-C cable 2m", sku: "channel3:Qe1Zr7m", category: "PHYSICAL_GOODS", quantity: 2, unit: "12.49" }]],
+  ["7XK21934BD551204R", [{ name: "Aluminium laptop stand", sku: "STAND-ALU-1", category: "PHYSICAL_GOODS", quantity: 1, unit: "39.00" }], { tax: 300 }],
+  ["2HW88310JS0174523", [{ name: "Anker 65W USB-C charger", sku: "CHG-65W-C", category: "PHYSICAL_GOODS", quantity: 1, unit: "35.99" }]],
+  ["5TY40012MV9930118", [{ name: "USB-C to USB-C cable 2m", sku: "CBL-USBC-2M", category: "PHYSICAL_GOODS", quantity: 2, unit: "12.49" }]],
   ["9PL55027KC4419620", [{ name: "Steam gift card", sku: "GIFT-50", category: "DIGITAL_GOODS", quantity: 1, unit: "50.00" }]],
-  ["3RD71128WW2207741", [{ name: "Ergonomic office chair", sku: "channel3:Hk3sW0p", category: "PHYSICAL_GOODS", quantity: 1, unit: "119.00" }]],
+  ["3RD71128WW2207741", [{ name: "Ergonomic office chair", sku: "CHAIR-ERGO-1", category: "PHYSICAL_GOODS", quantity: 1, unit: "119.00" }]],
 ];
 for (const [id, items, extra] of orders) {
   rail.orders.set(id, order(id, items, extra));
-  await gw.propose("shopper", { mandate_id: mid, agent_id: "shopper", idempotency_key: "k-" + id, paypal_order_id: id,
-    context: [{ source_url: "https://api.trychannel3.com/v1/search", excerpt: `Channel3 result for ${items[0].name}` }] } as any).catch(e => console.log("propose:", e.message));
+  await gw.propose("shopper", { mandate_id: mid, agent_id: "shopper", idempotency_key: "k-" + id, paypal_order_id: id } as any).catch(e => console.log("propose:", e.message));
 }
 const { createApp } = await import("../src/app.ts");
 const app = await createApp({ sql });

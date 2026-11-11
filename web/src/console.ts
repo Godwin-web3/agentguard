@@ -47,7 +47,7 @@ const skeletonTable = (el: HTMLElement) => { el.innerHTML = `<div class="stack g
 ["#gMandates", "#gStuck"].forEach(s => skeletonTable($(s)));
 
 // ---- views ----
-const TITLES: Record<string, string> = { overview: "Overview", mandates: "Mandates", payments: "Payments", receipts: "Receipts", recovery: "Recovery", audit: "Audit ledger" };
+const TITLES: Record<string, string> = { overview: "Overview", mandates: "Mandates", catalog: "Product search", payments: "Payments", receipts: "Receipts", recovery: "Recovery", audit: "Audit ledger" };
 function show(view: string, scrollTo?: string) {
   if (!TITLES[view]) view = "overview";
   document.querySelectorAll<HTMLElement>("[data-panel]").forEach(p => { p.hidden = p.dataset.panel !== view; });
@@ -57,6 +57,7 @@ function show(view: string, scrollTo?: string) {
   });
   $("#viewTitle").textContent = TITLES[view];
   if (view === "receipts") void verifyReceipts();
+  if (view === "catalog") void c3Status();
   if (scrollTo) document.getElementById(scrollTo)?.scrollIntoView({ block: "start", behavior: "smooth" });
 }
 const route = () => { const h = location.hash.slice(1); h === "approvals" ? show("overview", "approvalsCard") : show(h || "overview"); };
@@ -341,7 +342,7 @@ async function openPayment(id: string) {
   const head = kv([["Payment", r.payment_id], ["Status", r.status], ["Decision", ev.decision], ["Amount", money(ev.amount_minor ?? r.amount_minor, r.proposal?.currency ?? r.currency)],
     ["Payee", payeeOf(r.proposal)], ["Facts from", r.proposal?.facts_source], ["Mandate", r.mandate_id], ["Agent", r.agent_id], ["PayPal order", r.paypal_order_id],
     ["Authorization", r.paypal_authorization_id], ["Capture", r.paypal_capture_id], ["Created", r.created_at], ["Updated", r.updated_at], ["Proposal hash", ev.proposal_hash]]);
-  const items = (r.proposal?.items ?? []).map((i: any) => `<div class="check-row"><span class="what small">${esc(i.name)} <span class="subtle">× ${esc(i.quantity)}</span></span><span class="detail">${esc(i.sku ?? "")} · ${esc(i.unit_amount)} ${esc(r.proposal?.currency ?? "")}</span></div>`).join("");
+  const items = (r.proposal?.items ?? []).map((i: any) => `<div class="dr-item"><div class="stack"><span class="small">${esc(i.name)} <span class="subtle">× ${esc(i.quantity)}</span></span><span class="mono xs subtle">${esc(i.sku ?? "")}${/^channel3:/.test(i.sku ?? "") ? " · Channel3 catalog" : ""}</span></div><span class="mono small">${esc(i.unit_amount)} ${esc(r.proposal?.currency ?? "")}</span></div>`).join("");
   openDrawer("Payment", "i-activity", `<section class="dr-sec">${head}</section>` +
     (items ? `<section class="dr-sec"><h3 class="eyebrow">Line items</h3><div class="dr-checks">${items}</div></section>` : "") +
     `<section class="dr-sec"><h3 class="eyebrow">Policy checks</h3><div class="dr-checks">${checksHtml(ev.checks ?? [])}</div>` +
@@ -364,11 +365,63 @@ function openAudit(seq: number) {
     jsonBlock("Payload", r.payload, true));
 }
 
+// ---- product search (Channel3): discovery bounded by the mandate; paying still goes through a PayPal order ----
+let MANDATES: any[] = [];
+function fillMandates(m: any[]) {
+  MANDATES = m; const sel = $("#c3Mandate") as HTMLSelectElement, cur = sel.value;
+  const act = m.filter((x: any) => x.status === "active");
+  sel.innerHTML = act.length ? act.map((x: any) => `<option value="${esc(x.mandate.mandate_id)}">${esc(x.mandate.purpose.slice(0, 60))} · ${esc(x.mandate.constraints.max_total)} ${esc(x.mandate.constraints.currency)}</option>`).join("")
+    : `<option value="">No active mandate. Sign one first.</option>`;
+  if (act.some((x: any) => x.mandate.mandate_id === cur)) sel.value = cur;
+}
+let c3Checked = false;
+async function c3Status() {
+  if (c3Checked) return; c3Checked = true;
+  try { const s = await api("/v1/products/status"); const el = $("#c3State");
+    el.className = "badge " + (s.configured ? "badge-success" : "badge-warning"); el.innerHTML = '<span class="dot"></span>';
+    el.append(s.configured ? "Channel3 connected" : "Channel3 not configured");
+    ($("#c3Go") as HTMLButtonElement).disabled = !s.configured;
+    if (!s.configured) $("#c3Out").innerHTML = `<div class="card"><div class="empty">${icon("i-package-search")}<b>Product search is off on this deployment</b><p>Set <code class="inline">CHANNEL3_API_KEY</code> (free at trychannel3.com) to let agents find real products within their mandate.</p></div></div>`;
+  } catch { c3Checked = false; }
+}
+const fitBadge = (f: any) => !f ? "" : !f.fits ? badgeHtml("rejected", "outside mandate") : f.needs_approval ? badgeHtml("needs_human", "needs your approval") : badgeHtml("approve", "fits mandate");
+function productCard(p: any) {
+  const o = p.best_offer;
+  const offers = (p.offers ?? []).slice(0, 3).map((x: any) => `<div><span class="trunc">${esc(x.domain)}${x.availability !== "InStock" ? " · out of stock" : ""}</span><span class="mono">${esc(x.price)} ${esc(x.currency)}</span></div>`).join("");
+  const why = (p.mandate_fit?.checks ?? []).filter((c: any) => !c.pass).map((c: any) => c.detail).join("; ");
+  return `<article class="card c3-card"><div class="c3-img">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : icon("i-shopping-bag")}</div>
+    <div class="c3-bd"><div class="row gap-2" style="justify-content:space-between"><span class="xs subtle trunc">${esc(p.brand ?? p.category ?? "")}</span>${fitBadge(p.mandate_fit)}</div>
+      <div class="c3-title" title="${esc(p.title)}">${esc(p.title)}</div>
+      <div class="row gap-2"><span class="c3-price">${o ? `${esc(o.price)} <span class="xs subtle">${esc(o.currency)}</span>` : "—"}</span>${o ? `<span class="xs subtle trunc">at ${esc(o.domain)}</span>` : ""}</div>
+      ${why ? `<p class="xs" style="color:var(--danger)">${esc(why)}</p>` : ""}
+      ${offers ? `<div class="c3-offers">${offers}</div>` : ""}</div>
+    <div class="c3-ft"><code class="mono" title="Use as the PayPal order item sku">${esc(p.product_id)}</code>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" data-sku="${esc(p.product_id)}" aria-label="Copy product id">${icon("i-copy")}</button></div></article>`;
+}
+$("#c3Form").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const mandate_id = ($("#c3Mandate") as HTMLSelectElement).value, query = ($("#c3Query") as HTMLInputElement).value.trim();
+  if (!mandate_id) return toast("Sign a mandate first: search is bounded by it.", "warning");
+  if (!query) return ($("#c3Query") as HTMLInputElement).focus();
+  const out = $("#c3Out"), btn = $("#c3Go"); btn.setAttribute("aria-busy", "true");
+  out.innerHTML = `<div class="c3-grid">${[1, 2, 3, 4].map(() => `<div class="card c3-card"><div class="c3-img"></div><div class="c3-bd"><span class="skel" style="width:70%"></span><span class="skel" style="width:40%"></span></div></div>`).join("")}</div>`;
+  try {
+    const r = await api("/v1/products/search", { method: "POST", body: JSON.stringify({ mandate_id, query, limit: 12 }) });
+    const fit = r.products.filter((p: any) => p.mandate_fit?.fits).length;
+    out.innerHTML = `<div class="stack gap-3"><div class="c3-meta"><span class="small"><b>${r.products.length}</b> products from Channel3</span>${badgeHtml("approve", `${fit} fit the mandate`)}
+      <span class="xs subtle">capped at ${esc(r.max_price)} ${esc(r.currency)} for one payment · logged to the audit ledger</span></div>
+      ${r.products.length ? `<div class="c3-grid">${r.products.map(productCard).join("")}</div>` : `<div class="card"><div class="empty">${icon("i-package-search")}<b>Nothing within this mandate</b><p>No in-stock product under ${esc(r.max_price)} ${esc(r.currency)} matched. Try a broader query.</p></div></div>`}</div>`;
+    out.querySelectorAll<HTMLButtonElement>("[data-sku]").forEach(b => { b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.sku!); toast("Product id copied. Use it as the PayPal order item sku.", "success"); } catch { /* ignore */ } }; });
+    refresh().catch(() => {});
+  } catch (e) { out.innerHTML = `<div class="alert alert-danger">${icon("i-circle-alert")}<p>${esc(e instanceof Error ? e.message : e)}</p></div>`; }
+  btn.removeAttribute("aria-busy");
+});
+
 async function refresh() {
   if (!TOKEN) return;
   try {
     const [m, a, p, au, stuck, rc] = await Promise.all([api("/v1/mandates"), api("/v1/approvals"), api("/v1/payments"), api("/v1/audit"), api("/v1/payments/stuck"), api("/v1/receipts")]);
-    loaded = true; $("#loadErr").hidden = true;
+    loaded = true; $("#loadErr").hidden = true; fillMandates(m);
     renderApprovals(a);
     table($("#gMandates"), [
       { h: "Purpose", v: r => `<div class="stack"><span>${esc(r.mandate.purpose)}</span><span class="id">${short(r.mandate.mandate_id, 18)}</span></div>` },

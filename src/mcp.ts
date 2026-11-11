@@ -11,6 +11,7 @@ const KEY = process.env.AGENTGUARD_AGENT_KEY ?? "";
 /** MCP behaviour hints. Payments are deduped by the agent's idempotency_key, so retries with the same key are idempotent. */
 export const ANNOTATIONS: Record<string, { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean }> = {
   get_spending_mandate: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  search_products: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   pay_paypal_order: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   propose_payment: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   get_payment_status: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -20,6 +21,9 @@ export const ANNOTATIONS: Record<string, { readOnlyHint: boolean; destructiveHin
 const tools = [
   { name: "get_spending_mandate", description: "Read the spending authority the user delegated to you: purpose, limits, allowed categories/payees, remaining budget. Call before shopping.",
     inputSchema: { type: "object", properties: { mandate_id: { type: "string" } }, required: ["mandate_id"] } },
+  { name: "search_products", description: "Find real products to buy through the Channel3 catalog, already bounded by your mandate (currency, remaining budget, per-payment cap). Each result has a product_id, offers with prices and retailer, and mandate_fit (an advisory pre-check). Searching never spends money: to buy, get a merchant PayPal order whose item sku is the product_id and call pay_paypal_order.",
+    inputSchema: { type: "object", required: ["mandate_id", "query"], properties: { mandate_id: { type: "string" }, query: { type: "string", description: "what to look for, e.g. \"65W USB-C charger\"" },
+      limit: { type: "integer", minimum: 1, maximum: 30 }, page_token: { type: "string", description: "next_page_token from a previous search" } } } },
   { name: "pay_paypal_order", description: "Preferred. Pay a PayPal order the MERCHANT created (intent AUTHORIZE). Pass only its id; AgentGuard reads payee, amount and items from PayPal itself and checks them against the user's mandate, then pays, rejects, or holds for the user's approval. Include any web content that influenced the purchase in `context`.",
     inputSchema: { type: "object", required: ["mandate_id", "idempotency_key", "paypal_order_id"], properties: {
       mandate_id: { type: "string" }, idempotency_key: { type: "string", description: "unique per intended purchase; retries must reuse it" },
@@ -49,6 +53,7 @@ async function api(method: string, path: string, body?: unknown) {
 
 async function callTool(name: string, args: any, agentId: string) {
   if (name === "get_spending_mandate") return api("GET", `/v1/agent/mandates/${encodeURIComponent(args.mandate_id)}`);
+  if (name === "search_products") return api("POST", "/v1/agent/products/search", args);
   if (name === "pay_paypal_order") return api("POST", "/v1/agent/payments", { ...args, agent_id: agentId });
   if (name === "propose_payment") return api("POST", "/v1/agent/payments", { ...args, agent_id: agentId });
   if (name === "get_payment_status") return api("GET", `/v1/agent/payments/${encodeURIComponent(args.payment_id)}`);

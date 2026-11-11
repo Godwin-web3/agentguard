@@ -429,3 +429,23 @@ pre.json{margin:0;max-height:280px;overflow:auto;padding:12px;background:var(--b
 .drawer .verdict{padding:12px;border:1px solid var(--border);border-radius:var(--radius-md)}
 .drawer .check-row{display:grid;grid-template-columns:20px 1fr;column-gap:10px;row-gap:2px;align-items:start;padding:9px 12px}
 .drawer .check-row .i{margin-top:2px}.drawer .check-row .detail{grid-column:2;max-width:none;text-align:left;word-break:break-word}
+
+/* product search (Channel3) */
+.select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--text-3) 50%),linear-gradient(135deg,var(--text-3) 50%,transparent 50%);
+  background-position:calc(100% - 16px) 50%,calc(100% - 11px) 50%;background-size:5px 5px;background-repeat:no-repeat;padding-right:30px}
+.c3-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 2px}
+.c3-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.c3-card{display:flex;flex-direction:column;overflow:hidden}
+.c3-img{aspect-ratio:16/10;background:var(--bg-subtle);border-bottom:1px solid var(--border);display:grid;place-items:center;overflow:hidden}
+.c3-img img{width:100%;height:100%;object-fit:contain;padding:12px;mix-blend-mode:multiply}
+:root[data-theme=dark] .c3-img img{mix-blend-mode:normal}
+.c3-img .i{width:28px;height:28px;color:var(--text-3)}
+.c3-bd{padding:12px 14px;display:flex;flex-direction:column;gap:8px;flex:1}
+.c3-title{font-weight:560;font-size:var(--text-sm);line-height:var(--leading-sm);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.c3-price{font-family:var(--font-mono);font-weight:600;font-size:var(--text-md);font-variant-numeric:tabular-nums}
+.c3-offers{border-top:1px solid var(--border);padding-top:8px;display:flex;flex-direction:column;gap:2px}
+.c3-offers div{display:flex;justify-content:space-between;gap:8px;font-size:var(--text-xs);color:var(--text-2)}
+.c3-offers .mono{font-variant-numeric:tabular-nums}
+.c3-ft{display:flex;align-items:center;gap:6px;padding:10px 14px;border-top:1px solid var(--border);background:var(--bg-subtle)}
+.c3-ft code{font-size:var(--text-xs);color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.dr-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border-top:1px solid var(--border)}.dr-item:first-child{border-top:0}
