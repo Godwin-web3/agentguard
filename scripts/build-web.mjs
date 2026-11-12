@@ -22,9 +22,10 @@ const expand = (s, depth = 0) => s.replace(/<!--#include ([a-z-]+)-->/g, (_, n) 
 const common = { bundle: true, minify: true, target: "es2022", legalComments: "none", logLevel: "warning", outdir: join(out, "assets") };
 // theme.js is a classic blocking <head> script (no flash of the wrong theme); site.js is tiny and shared.
 await build({ ...common, entryPoints: { theme: join(root, "web/src/theme.ts") }, format: "iife" });
-await build({ ...common, entryPoints: { site: join(root, "web/src/site.ts"), console: join(root, "web/src/console.ts"), docs: join(root, "web/src/docs.ts") }, format: "esm" });
-// Pages that verify receipts carry the shared verifier with browser shims for node:crypto and Buffer.
-const heavy = Object.fromEntries([["receipt", "web/src/receipt.ts"]].filter(([, f]) => existsSync(join(root, f))).map(([k, f]) => [k, join(root, f)]));
+await build({ ...common, entryPoints: { site: join(root, "web/src/site.ts"), docs: join(root, "web/src/docs.ts") }, format: "esm" });
+// Pages that verify receipts (the receipt viewer, and the console's AG Grid receipts view) carry the shared verifier
+// with browser shims for node:crypto and Buffer.
+const heavy = Object.fromEntries([["receipt", "web/src/receipt.ts"], ["console", "web/src/console.ts"]].filter(([, f]) => existsSync(join(root, f))).map(([k, f]) => [k, join(root, f)]));
 if (Object.keys(heavy).length) await build({ ...common, entryPoints: heavy, ...browserVerifierOptions(root) });
 
 cpSync(join(root, "web/site.css"), join(out, "assets/site.css"));

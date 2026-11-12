@@ -2,8 +2,9 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve, sep, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Content-Security-Policy for every page: no inline script, no third-party origins. */
-export const SITE_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; " +
+/** Content-Security-Policy for every page: no inline script, no third-party script/connect origins. Images may load over
+ * https so the console can show Channel3 product photos (passive content only; requests carry no credentials). */
+export const SITE_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; " +
   "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json", ".txt": "text/plain; charset=utf-8", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json" };

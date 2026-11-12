@@ -151,7 +151,8 @@ for n, d in GLYPHS.items():
 LUCIDE = ["arrow-right", "arrow-up-right", "check", "x", "copy", "lock", "fingerprint", "file-check", "terminal", "key-round", "activity",
           "triangle-alert", "loader-circle", "circle-check", "circle-x", "external-link", "refresh-cw", "upload", "link", "clock", "layout-dashboard",
           "book-open", "sun", "moon", "server", "database", "scale", "log-out", "plus", "inbox", "file-text", "ban", "circle-alert", "chevron-right",
-          "menu", "hash", "code", "eye-off", "shield-off", "list-checks", "git-commit-horizontal", "timer", "user-round", "bot", "monitor"]
+          "menu", "hash", "code", "eye-off", "shield-off", "list-checks", "git-commit-horizontal", "timer", "user-round", "bot", "monitor",
+          "search", "download", "shopping-bag", "package-search", "store"]
 # Attributes on each symbol: an external <use> does not inherit presentation attributes from the sprite root.
 SYM_ATTRS = 'fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"'
 syms = []

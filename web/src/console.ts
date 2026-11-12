@@ -2,6 +2,9 @@
 // Contract used by scripts/e2e-console-*.ts: #token #connect #user(change) #pkCreate #pkState("passkey: registered") #pkLink,
 // button[data-ap][data-v], window.reviewAndSign / window.signedRevoke, confirm() only (never alert()).
 import "./site.ts";
+import { makeGrid, col, badgeHtml, type Grid } from "./grids.ts";
+import { verifyChainRows, type ChainResult } from "./chain.ts";
+import { verifyReceipt } from "./verifier.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector<T>(s)!;
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -41,10 +44,10 @@ function table(el: HTMLElement, cols: Col[], rows: any[], empty: { icon: string;
     rows.map(r => `<tr>${cols.map(c => `<td class="${c.cls ?? ""}">${c.v(r)}</td>`).join("")}</tr>`).join("") + "</tbody></table>";
 }
 const skeletonTable = (el: HTMLElement) => { el.innerHTML = `<div class="stack gap-4" style="padding:18px 16px">${[70, 90, 55, 80].map(w => `<span class="skel" style="width:${w}%"></span>`).join("")}</div>`; };
-["#gMandates", "#gPayments", "#gStuck", "#gAudit"].forEach(s => skeletonTable($(s)));
+["#gMandates", "#gStuck"].forEach(s => skeletonTable($(s)));
 
 // ---- views ----
-const TITLES: Record<string, string> = { overview: "Overview", mandates: "Mandates", payments: "Payments", recovery: "Recovery", audit: "Audit ledger" };
+const TITLES: Record<string, string> = { overview: "Overview", mandates: "Mandates", catalog: "Product search", payments: "Payments", receipts: "Receipts", recovery: "Recovery", audit: "Audit ledger" };
 function show(view: string, scrollTo?: string) {
   if (!TITLES[view]) view = "overview";
   document.querySelectorAll<HTMLElement>("[data-panel]").forEach(p => { p.hidden = p.dataset.panel !== view; });
@@ -53,6 +56,8 @@ function show(view: string, scrollTo?: string) {
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
   $("#viewTitle").textContent = TITLES[view];
+  if (view === "receipts") void verifyReceipts();
+  if (view === "catalog") void c3Status();
   if (scrollTo) document.getElementById(scrollTo)?.scrollIntoView({ block: "start", behavior: "smooth" });
 }
 const route = () => { const h = location.hash.slice(1); h === "approvals" ? show("overview", "approvalsCard") : show(h || "overview"); };
@@ -183,11 +188,240 @@ $("#gMandates").addEventListener("click", async ev => {
 });
 
 let loaded = false;
+// ---- AG Grid: payments, receipts and the audit ledger ----
+let PAYMENTS: any[] = [], RECEIPTS: any[] = [], AUDIT: any[] = [];
+let CHAIN = new Map<number, ChainResult>();
+type RcCheck = { state: "checking" | "valid" | "invalid"; res?: any; env?: any; error?: string };
+const RC = new Map<string, RcCheck>();
+const receiptByPayment = () => new Map(RECEIPTS.map((r: any) => [r.payment_id, r]));
+
+const paymentRow = (r: any) => ({
+  id: r.payment_id, created_at: r.created_at, updated_at: r.updated_at, payee: payeeOf(r.proposal), amount_minor: r.evaluation?.amount_minor ?? r.amount_minor,
+  currency: r.proposal?.currency ?? r.currency, decision: r.evaluation?.decision, status: r.status, mandate_id: r.mandate_id, agent_id: r.agent_id,
+  paypal_order_id: r.paypal_order_id ?? "", paypal_capture_id: r.paypal_capture_id ?? "", facts_source: r.proposal?.facts_source ?? "",
+  catalog: (r.proposal?.items ?? []).map((i: any) => i.sku).filter((k: string) => /^channel3:/.test(k ?? "")).join(" "),
+  receipt_id: receiptByPayment().get(r.payment_id)?.receipt_id ?? "",
+  why: (r.evaluation?.reasons || []).join("; ") || r.error || "all checks passed",
+});
+const receiptRow = (r: any) => {
+  const p = PAYMENTS.find((x: any) => x.payment_id === r.payment_id); const v = RC.get(r.receipt_id);
+  return { id: r.receipt_id, receipt_id: r.receipt_id, payment_id: r.payment_id, capture_id: r.capture_id, issued_at: r.issued_at, receipt_hash: r.receipt_hash,
+    amount_minor: p?.evaluation?.amount_minor ?? null, currency: p?.proposal?.currency ?? "", payee: payeeOf(p?.proposal), mandate_id: p?.mandate_id ?? "",
+    paypal_order_id: p?.paypal_order_id ?? "", verdict: v?.state ?? "checking",
+    checks: v?.res ? `${v.res.checks.filter((c: any) => c.pass).length}/${v.res.checks.length}` : "", issuer_kid: v?.env?.signature?.kid ?? v?.env?.signature?.key_id ?? "" };
+};
+const auditRow = (r: any) => ({ ...r, id: String(r.seq), chain: CHAIN.get(r.seq)?.status ?? "checking", chain_detail: CHAIN.get(r.seq)?.detail ?? "", payload_text: JSON.stringify(r.payload) });
+
+const grids = {
+  payments: makeGrid<any>($("#gPayments"), { rowId: r => r.id, empty: "No payments yet. Agents propose payments through the API or the MCP server.",
+    columnDefs: [
+      col.time("created_at", "Time", { sort: "desc" }),
+      col.text("payee", "Payee", { cellClass: "ag-mono", width: 200 }),
+      col.money("amount_minor", "currency", "Amount"),
+      col.badge("decision", "Decision", { width: 130 }),
+      col.badge("status", "Status", { width: 130 }),
+      col.mono("mandate_id", "Mandate", { width: 160 }),
+      col.mono("paypal_order_id", "PayPal order", { width: 170 }),
+      col.mono("paypal_capture_id", "Capture", { width: 150 }),
+      col.badge("facts_source", "Facts from", { width: 140, cellRenderer: (q: any) => q.value === "paypal_order" ? badgeHtml("verified", "PayPal order") : q.value ? badgeHtml("unsigned", "agent-declared") : "" }),
+      col.mono("receipt_id", "Receipt", { width: 150, hide: false }),
+      col.mono("catalog", "Catalog", { width: 140, headerTooltip: "Channel3 product ids on the order's line items" }),
+      col.text("why", "Why", { flex: 1, minWidth: 220, cellClass: "ag-muted", tooltipField: "why" }),
+      col.mono("agent_id", "Agent", { width: 120, hide: true }),
+      col.mono("id", "Payment id", { width: 160, hide: true }),
+    ],
+    onRowClicked: e => openPayment(e.data!.id) }),
+  receipts: makeGrid<any>($("#gReceipts"), { rowId: r => r.id, empty: "No receipts yet. Captured merchant-order payments get a signed Proof-of-Intent receipt.",
+    columnDefs: [
+      col.time("issued_at", "Issued", { sort: "desc" }),
+      col.badge("verdict", "Signature", { width: 130, headerTooltip: "Ed25519 issuer signature + passkey + order digest, re-verified in this browser" }),
+      col.text("checks", "Checks", { width: 100, cellClass: "ag-num" }),
+      col.mono("receipt_id", "Receipt", { width: 170 }),
+      col.money("amount_minor", "currency", "Amount"),
+      col.text("payee", "Payee", { cellClass: "ag-mono", width: 190 }),
+      col.mono("paypal_order_id", "PayPal order", { width: 170 }),
+      col.mono("capture_id", "Capture", { width: 160 }),
+      col.mono("mandate_id", "Mandate", { width: 160 }),
+      col.mono("issuer_kid", "Issuer key", { width: 130 }),
+      col.mono("receipt_hash", "Receipt hash", { flex: 1, minWidth: 200 }),
+      col.mono("payment_id", "Payment id", { width: 160, hide: true }),
+    ],
+    onRowClicked: e => openReceipt(e.data!.id) }),
+  audit: makeGrid<any>($("#gAudit"), { rowId: r => r.id, empty: "Ledger is empty. Every mandate, decision and capture is appended here.",
+    rowClassRules: { "ag-row-broken": p => p.data?.chain === "broken" },
+    columnDefs: [
+      { field: "seq", headerName: "#", filter: "agNumberColumnFilter", width: 90, sort: "desc", type: "rightAligned", cellClass: "ag-mono" },
+      col.time("ts", "Time"),
+      col.mono("event", "Event", { width: 210 }),
+      col.mono("ref", "Ref", { width: 170 }),
+      col.badge("chain", "Chain", { width: 125, tooltipField: "chain_detail" }),
+      col.mono("hash", "Hash", { width: 200 }),
+      col.mono("prev_hash", "Prev hash", { width: 200 }),
+      col.text("payload_text", "Payload", { flex: 1, minWidth: 240, cellClass: "ag-mono ag-muted", tooltipField: "payload_text" }),
+    ],
+    onRowClicked: e => openAudit(Number(e.data!.seq)) }),
+};
+($("#qPayments") as HTMLInputElement).addEventListener("input", e => grids.payments.quick((e.target as HTMLInputElement).value));
+($("#qReceipts") as HTMLInputElement).addEventListener("input", e => grids.receipts.quick((e.target as HTMLInputElement).value));
+($("#qAudit") as HTMLInputElement).addEventListener("input", e => grids.audit.quick((e.target as HTMLInputElement).value));
+const stamp = () => new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+$("#csvPayments").onclick = () => grids.payments.csv(`agentguard-payments-${stamp()}.csv`);
+$("#csvReceipts").onclick = () => grids.receipts.csv(`agentguard-dispute-evidence-${stamp()}.csv`);
+$("#csvAudit").onclick = () => grids.audit.csv(`agentguard-audit-ledger-${stamp()}.csv`);
+
+async function renderAudit(rows: any[]) {
+  AUDIT = rows; CHAIN = await verifyChainRows(rows);
+  grids.audit.set(rows.map(auditRow));
+  const bad = [...CHAIN.entries()].filter(([, v]) => v.status === "broken").map(([k]) => k).sort((a, b) => a - b);
+  const el = $("#auSummary"); el.className = "badge " + (bad.length ? "badge-danger" : rows.length ? "badge-success" : "");
+  el.innerHTML = '<span class="dot"></span>'; el.append(bad.length ? `broken at #${bad[0]}` : `${rows.length} recomputed locally`);
+}
+
+// Receipts: fetch each envelope once and verify it with the same verifier merchants use (@agentguard-dev/intent-verifier).
+let issuerKeys: { at: number; keys: any } | null = null;
+const keySet = async () => { if (!issuerKeys || Date.now() - issuerKeys.at > 300_000) issuerKeys = { at: Date.now(), keys: await (await fetch("/.well-known/agentguard-keys")).json() }; return issuerKeys.keys; };
+let verifying = false;
+async function verifyReceipts() {
+  if (verifying) return; verifying = true;
+  try {
+    const todo = RECEIPTS.filter((r: any) => !RC.has(r.receipt_id) || RC.get(r.receipt_id)!.state === "checking");
+    const keys = todo.length ? await keySet() : null;
+    for (let i = 0; i < todo.length; i += 4) {
+      await Promise.all(todo.slice(i, i + 4).map(async (r: any) => {
+        try { const env = await api(`/v1/receipts/${encodeURIComponent(r.receipt_id)}`); const res = await verifyReceipt(env, { issuerKeys: keys });
+          RC.set(r.receipt_id, { state: res.ok ? "valid" : "invalid", res, env }); }
+        catch (e) { RC.set(r.receipt_id, { state: "invalid", error: e instanceof Error ? e.message : String(e) }); }
+      }));
+      grids.receipts.set(RECEIPTS.map(receiptRow));
+    }
+  } finally { verifying = false; }
+  const all = RECEIPTS.map((r: any) => RC.get(r.receipt_id)?.state), bad = all.filter(s => s === "invalid").length;
+  const el = $("#rcSummary"); el.className = "badge " + (bad ? "badge-danger" : all.length ? "badge-success" : "");
+  el.innerHTML = '<span class="dot"></span>'; el.append(!all.length ? "none yet" : bad ? `${bad} of ${all.length} invalid` : `${all.length} of ${all.length} verified`);
+}
+
+// ---- detail drawer ----
+const kv = (rows: [string, unknown][]) => `<dl class="kv">${rows.filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`;
+const checksHtml = (checks: { check: string; pass: boolean; detail: string }[]) => checks.map(c => `<div class="check-row">${icon(c.pass ? "i-circle-check" : "i-circle-x", "i " + (c.pass ? "ok" : "bad"))}` +
+  `<span class="what mono small">${esc(c.check)}<span class="sr-only">: ${c.pass ? "pass" : "fail"}</span></span><span class="detail">${esc(c.detail)}</span></div>`).join("");
+const verdictHtml = (ok: boolean, sub: string) => `<div class="verdict ${ok ? "ok" : "bad"}"><div class="mark">${icon(ok ? "i-check" : "i-x", "i i-lg")}</div>` +
+  `<div class="stack"><span class="word">${ok ? "VALID" : "INVALID"}</span><span class="small muted">${esc(sub)}</span></div></div>`;
+const jsonBlock = (title: string, v: unknown, open = false) => `<details class="dr-sec" ${open ? "open" : ""}><summary class="small">${esc(title)}</summary><pre class="json">${esc(JSON.stringify(v, null, 2))}</pre></details>`;
+let lastFocus: HTMLElement | null = null;
+function openDrawer(title: string, iconId: string, html: string) {
+  lastFocus = document.activeElement as HTMLElement;
+  $("#drawerTitle").textContent = title; $("#drawerIcon").querySelector("use")!.setAttribute("href", `/brand/icons.svg#${iconId}`);
+  $("#drawerBody").innerHTML = html; $("#drawer").hidden = false; $("#drawerScrim").hidden = false; ($("#drawerClose") as HTMLButtonElement).focus();
+}
+function closeDrawer() { $("#drawer").hidden = true; $("#drawerScrim").hidden = true; lastFocus?.focus(); }
+$("#drawerClose").onclick = closeDrawer; $("#drawerScrim").onclick = closeDrawer;
+addEventListener("keydown", e => { if (e.key === "Escape" && !$("#drawer").hidden) closeDrawer(); });
+function download(name: string, data: unknown) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+  a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function receiptSection(receiptId: string) {
+  if (!RC.has(receiptId) || RC.get(receiptId)!.state === "checking") {
+    try { const env = await api(`/v1/receipts/${encodeURIComponent(receiptId)}`); const res = await verifyReceipt(env, { issuerKeys: await keySet() });
+      RC.set(receiptId, { state: res.ok ? "valid" : "invalid", res, env }); }
+    catch (e) { RC.set(receiptId, { state: "invalid", error: e instanceof Error ? e.message : String(e) }); }
+  }
+  const v = RC.get(receiptId)!;
+  if (!v.res) return `<div class="alert alert-danger">${icon("i-circle-alert")}<p>${esc(v.error ?? "could not verify")}</p></div>`;
+  const failed = v.res.checks.filter((c: any) => !c.pass).length;
+  return verdictHtml(v.res.ok, v.res.ok ? `All ${v.res.checks.length} checks passed${v.res.trusted_issuer ? " under the published issuer key set" : ""}. Verified in this browser.` : `${failed} of ${v.res.checks.length} checks failed.`) +
+    `<div class="dr-checks">${checksHtml([...v.res.checks].sort((a: any, b: any) => Number(a.pass) - Number(b.pass)))}</div>` +
+    v.res.warnings.map((w: string) => `<div class="alert alert-warning">${icon("i-triangle-alert")}<p>${esc(w)}</p></div>`).join("") +
+    `<div class="row gap-2 wrap"><button class="btn btn-secondary btn-sm" type="button" data-dl="${esc(receiptId)}">${icon("i-download")}Download receipt JSON</button>` +
+    `<a class="btn btn-ghost btn-sm" href="/receipt">${icon("i-external-link")}Public verifier</a></div>` + jsonBlock("Signed receipt (JSON)", v.env);
+}
+const wireDownloads = () => document.querySelectorAll<HTMLButtonElement>("#drawerBody [data-dl]").forEach(b => { b.onclick = () => download(`${b.dataset.dl}.json`, RC.get(b.dataset.dl!)?.env); });
+async function openPayment(id: string) {
+  const r = PAYMENTS.find((x: any) => x.payment_id === id); if (!r) return;
+  const rc = receiptByPayment().get(id), ev = r.evaluation ?? {};
+  const head = kv([["Payment", r.payment_id], ["Status", r.status], ["Decision", ev.decision], ["Amount", money(ev.amount_minor ?? r.amount_minor, r.proposal?.currency ?? r.currency)],
+    ["Payee", payeeOf(r.proposal)], ["Facts from", r.proposal?.facts_source], ["Mandate", r.mandate_id], ["Agent", r.agent_id], ["PayPal order", r.paypal_order_id],
+    ["Authorization", r.paypal_authorization_id], ["Capture", r.paypal_capture_id], ["Created", r.created_at], ["Updated", r.updated_at], ["Proposal hash", ev.proposal_hash]]);
+  const items = (r.proposal?.items ?? []).map((i: any) => `<div class="dr-item"><div class="stack"><span class="small">${esc(i.name)} <span class="subtle">× ${esc(i.quantity)}</span></span><span class="mono xs subtle">${esc(i.sku ?? "")}${/^channel3:/.test(i.sku ?? "") ? " · Channel3 catalog" : ""}</span></div><span class="mono small">${esc(i.unit_amount)} ${esc(r.proposal?.currency ?? "")}</span></div>`).join("");
+  openDrawer("Payment", "i-activity", `<section class="dr-sec">${head}</section>` +
+    (items ? `<section class="dr-sec"><h3 class="eyebrow">Line items</h3><div class="dr-checks">${items}</div></section>` : "") +
+    `<section class="dr-sec"><h3 class="eyebrow">Policy checks</h3><div class="dr-checks">${checksHtml(ev.checks ?? [])}</div>` +
+    (ev.risk ?? []).map((x: any) => `<div class="alert alert-warning">${icon("i-triangle-alert")}<p><b class="mono xs">${esc(x.signal)}</b> ${esc(x.detail)}</p></div>`).join("") + `</section>` +
+    `<section class="dr-sec" id="drReceipt"><h3 class="eyebrow">Proof-of-Intent receipt</h3>${rc ? `<span class="skel" style="width:60%"></span>` : `<p class="small muted">No receipt: only captured merchant-order payments get one.</p>`}</section>` +
+    jsonBlock("Stored record (JSON)", r));
+  if (rc) { const html = await receiptSection(rc.receipt_id); const el = document.getElementById("drReceipt"); if (el) { el.innerHTML = `<h3 class="eyebrow">Proof-of-Intent receipt</h3>` + html; wireDownloads(); } grids.receipts.set(RECEIPTS.map(receiptRow)); }
+}
+async function openReceipt(id: string) {
+  openDrawer("Receipt", "g-receipt", `<section class="dr-sec"><span class="skel" style="width:60%"></span></section>`);
+  const html = await receiptSection(id);
+  const r = RECEIPTS.find((x: any) => x.receipt_id === id);
+  $("#drawerBody").innerHTML = `<section class="dr-sec">${html}</section><section class="dr-sec">${kv([["Receipt", id], ["Payment", r?.payment_id], ["Capture", r?.capture_id], ["Issued", r?.issued_at], ["Receipt hash", r?.receipt_hash]])}</section>`;
+  wireDownloads(); grids.receipts.set(RECEIPTS.map(receiptRow));
+}
+function openAudit(seq: number) {
+  const r = AUDIT.find((x: any) => x.seq === seq); if (!r) return; const c = CHAIN.get(seq);
+  openDrawer(`Audit entry #${seq}`, "g-anchor", `<section class="dr-sec">${verdictHtml(c?.status !== "broken", c?.detail ?? "")}</section>` +
+    `<section class="dr-sec">${kv([["Event", r.event], ["Ref", r.ref], ["Time", r.ts], ["Prev hash", r.prev_hash], ["Stored hash", r.hash], ["Recomputed", c?.computed]])}</section>` +
+    jsonBlock("Payload", r.payload, true));
+}
+
+// ---- product search (Channel3): discovery bounded by the mandate; paying still goes through a PayPal order ----
+let MANDATES: any[] = [];
+function fillMandates(m: any[]) {
+  MANDATES = m; const sel = $("#c3Mandate") as HTMLSelectElement, cur = sel.value;
+  const act = m.filter((x: any) => x.status === "active");
+  sel.innerHTML = act.length ? act.map((x: any) => `<option value="${esc(x.mandate.mandate_id)}">${esc(x.mandate.purpose.slice(0, 60))} · ${esc(x.mandate.constraints.max_total)} ${esc(x.mandate.constraints.currency)}</option>`).join("")
+    : `<option value="">No active mandate. Sign one first.</option>`;
+  if (act.some((x: any) => x.mandate.mandate_id === cur)) sel.value = cur;
+}
+let c3Checked = false;
+async function c3Status() {
+  if (c3Checked) return; c3Checked = true;
+  try { const s = await api("/v1/products/status"); const el = $("#c3State");
+    el.className = "badge " + (s.configured ? "badge-success" : "badge-warning"); el.innerHTML = '<span class="dot"></span>';
+    el.append(s.configured ? "Channel3 connected" : "Channel3 not configured");
+    ($("#c3Go") as HTMLButtonElement).disabled = !s.configured;
+    if (!s.configured) $("#c3Out").innerHTML = `<div class="card"><div class="empty">${icon("i-package-search")}<b>Product search is off on this deployment</b><p>Set <code class="inline">CHANNEL3_API_KEY</code> (free at trychannel3.com) to let agents find real products within their mandate.</p></div></div>`;
+  } catch { c3Checked = false; }
+}
+const fitBadge = (f: any) => !f ? "" : !f.fits ? badgeHtml("rejected", "outside mandate") : f.needs_approval ? badgeHtml("needs_human", "needs your approval") : badgeHtml("approve", "fits mandate");
+function productCard(p: any) {
+  const o = p.best_offer;
+  const offers = (p.offers ?? []).slice(0, 3).map((x: any) => `<div><span class="trunc">${esc(x.domain)}${x.availability !== "InStock" ? " · out of stock" : ""}</span><span class="mono">${esc(x.price)} ${esc(x.currency)}</span></div>`).join("");
+  const why = (p.mandate_fit?.checks ?? []).filter((c: any) => !c.pass).map((c: any) => c.detail).join("; ");
+  return `<article class="card c3-card"><div class="c3-img">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : icon("i-shopping-bag")}</div>
+    <div class="c3-bd"><div class="row gap-2" style="justify-content:space-between"><span class="xs subtle trunc">${esc(p.brand ?? p.category ?? "")}</span>${fitBadge(p.mandate_fit)}</div>
+      <div class="c3-title" title="${esc(p.title)}">${esc(p.title)}</div>
+      <div class="row gap-2"><span class="c3-price">${o ? `${esc(o.price)} <span class="xs subtle">${esc(o.currency)}</span>` : "—"}</span>${o ? `<span class="xs subtle trunc">at ${esc(o.domain)}</span>` : ""}</div>
+      ${why ? `<p class="xs" style="color:var(--danger)">${esc(why)}</p>` : ""}
+      ${offers ? `<div class="c3-offers">${offers}</div>` : ""}</div>
+    <div class="c3-ft"><code class="mono" title="Use as the PayPal order item sku">${esc(p.product_id)}</code>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" data-sku="${esc(p.product_id)}" aria-label="Copy product id">${icon("i-copy")}</button></div></article>`;
+}
+$("#c3Form").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const mandate_id = ($("#c3Mandate") as HTMLSelectElement).value, query = ($("#c3Query") as HTMLInputElement).value.trim();
+  if (!mandate_id) return toast("Sign a mandate first: search is bounded by it.", "warning");
+  if (!query) return ($("#c3Query") as HTMLInputElement).focus();
+  const out = $("#c3Out"), btn = $("#c3Go"); btn.setAttribute("aria-busy", "true");
+  out.innerHTML = `<div class="c3-grid">${[1, 2, 3, 4].map(() => `<div class="card c3-card"><div class="c3-img"></div><div class="c3-bd"><span class="skel" style="width:70%"></span><span class="skel" style="width:40%"></span></div></div>`).join("")}</div>`;
+  try {
+    const r = await api("/v1/products/search", { method: "POST", body: JSON.stringify({ mandate_id, query, limit: 12 }) });
+    const fit = r.products.filter((p: any) => p.mandate_fit?.fits).length;
+    out.innerHTML = `<div class="stack gap-3"><div class="c3-meta"><span class="small"><b>${r.products.length}</b> products from Channel3</span>${badgeHtml("approve", `${fit} fit the mandate`)}
+      <span class="xs subtle">capped at ${esc(r.max_price)} ${esc(r.currency)} for one payment · logged to the audit ledger</span></div>
+      ${r.products.length ? `<div class="c3-grid">${r.products.map(productCard).join("")}</div>` : `<div class="card"><div class="empty">${icon("i-package-search")}<b>Nothing within this mandate</b><p>No in-stock product under ${esc(r.max_price)} ${esc(r.currency)} matched. Try a broader query.</p></div></div>`}</div>`;
+    out.querySelectorAll<HTMLButtonElement>("[data-sku]").forEach(b => { b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.sku!); toast("Product id copied. Use it as the PayPal order item sku.", "success"); } catch { /* ignore */ } }; });
+    refresh().catch(() => {});
+  } catch (e) { out.innerHTML = `<div class="alert alert-danger">${icon("i-circle-alert")}<p>${esc(e instanceof Error ? e.message : e)}</p></div>`; }
+  btn.removeAttribute("aria-busy");
+});
+
 async function refresh() {
   if (!TOKEN) return;
   try {
-    const [m, a, p, au, stuck] = await Promise.all([api("/v1/mandates"), api("/v1/approvals"), api("/v1/payments"), api("/v1/audit"), api("/v1/payments/stuck")]);
-    loaded = true; $("#loadErr").hidden = true;
+    const [m, a, p, au, stuck, rc] = await Promise.all([api("/v1/mandates"), api("/v1/approvals"), api("/v1/payments"), api("/v1/audit"), api("/v1/payments/stuck"), api("/v1/receipts")]);
+    loaded = true; $("#loadErr").hidden = true; fillMandates(m);
     renderApprovals(a);
     table($("#gMandates"), [
       { h: "Purpose", v: r => `<div class="stack"><span>${esc(r.mandate.purpose)}</span><span class="id">${short(r.mandate.mandate_id, 18)}</span></div>` },
@@ -198,16 +432,8 @@ async function refresh() {
       { h: "Expires", v: r => `<span class="small muted">${esc(when(r.mandate.expires_at))}</span>` },
       { h: "", cls: "actions", v: mandateActions },
     ], m, { icon: "g-mandate", title: "No mandates yet", body: "Draft one from plain language on the Overview, then sign it with the user's passkey." });
-    const pays = [...p].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
-    table($("#gPayments"), [
-      { h: "Time", v: r => `<span class="small muted">${esc(when(r.created_at))}</span>` },
-      { h: "Payee", v: r => `<span class="id">${esc(payeeOf(r.proposal))}</span>` },
-      { h: "Amount", cls: "num", v: r => money(r.evaluation.amount_minor, r.proposal.currency) },
-      { h: "Decision", v: r => badge(r.evaluation.decision) },
-      { h: "Status", v: r => badge(r.status) },
-      { h: "Why", v: r => `<span class="small muted">${esc((r.evaluation.reasons || []).join("; ") || r.error || "all checks passed")}</span>` },
-      { h: "PayPal capture", v: r => `<span class="id">${esc(r.paypal_capture_id || "")}</span>` },
-    ], pays, { icon: "i-activity", title: "No payments yet", body: "Agents propose payments through the API or the MCP server. Every decision shows up here." });
+    PAYMENTS = p;
+    grids.payments.set(p.map(paymentRow));
     table($("#gStuck"), [
       { h: "Updated", v: r => `<span class="small muted">${esc(when(r.updated_at))}</span>` },
       { h: "Payment", v: r => `<span class="id">${esc(r.payment_id)}</span>` },
@@ -216,20 +442,14 @@ async function refresh() {
       { h: "Authorization", v: r => `<span class="id">${esc(r.paypal_authorization_id || "")}</span>` },
       { h: "Error", v: r => `<span class="small" style="color:var(--danger)">${esc(r.error || "")}</span>` },
     ], stuck, { icon: "i-circle-check", title: "Nothing stuck", body: "Every payment reached a final state." });
-    const audit = [...au].sort((x, y) => y.seq - x.seq);
-    table($("#gAudit"), [
-      { h: "#", cls: "num", v: r => `<span class="id">${esc(r.seq)}</span>` },
-      { h: "Time", v: r => `<span class="small muted">${esc(when(r.ts))}</span>` },
-      { h: "Event", v: r => `<span class="mono xs">${esc(r.event)}</span>` },
-      { h: "Ref", v: r => `<span class="id">${esc(r.ref)}</span>` },
-      { h: "Hash", v: r => `<span class="id">${short(r.hash, 16)}</span>` },
-    ], audit, { icon: "g-anchor", title: "Ledger is empty", body: "Every mandate, decision and capture is appended here as a hash-chained entry." });
+    await renderAudit(au);
+    RECEIPTS = rc; grids.receipts.set(rc.map(receiptRow)); void verifyReceipts();
     const active = m.filter((x: any) => x.status === "active").length;
     $("#stActive").textContent = String(active);
     const cap: Record<string, number> = {};
     for (const x of p) if (x.status === "captured") cap[x.proposal.currency] = (cap[x.proposal.currency] ?? 0) + x.evaluation.amount_minor;
     $("#stCaptured").innerHTML = Object.keys(cap).length ? Object.entries(cap).map(([c, v]) => money(v, c)).join("<br>") : "0.00";
-    $("#navMandates").textContent = String(m.length); $("#navPayments").textContent = String(p.length);
+    $("#navMandates").textContent = String(m.length); $("#navPayments").textContent = String(p.length); $("#navReceipts").textContent = String(rc.length);
     $("#stuckCount").textContent = String(stuck.length); $("#stuckCount").classList.toggle("hot", stuck.length > 0);
     const c = $("#conn"); c.className = "badge badge-success"; c.innerHTML = '<span class="dot"></span>connected';
   } catch (e) {
@@ -273,7 +493,13 @@ $("#pkLink").onclick = async () => {
   } catch (e) { fail(e); }
 };
 $("#enrollClose").onclick = () => { $("#enrollPanel").hidden = true; };
-$("#verify").onclick = verifyChain;
+$("#verify").onclick = async () => {
+  await verifyChain();
+  try { await renderAudit(await api("/v1/audit"));
+    const bad = [...CHAIN.values()].filter(v => v.status === "broken").length;
+    toast(bad ? `${bad} audit entries failed local recomputation.` : `Server and browser agree: ${CHAIN.size} entries recomputed, chain intact.`, bad ? "danger" : "success"); }
+  catch (e) { fail(e); }
+};
 $("#recover").onclick = async () => {
   if (!confirm("Run recovery now for payments older than 60s?")) return;
   try { const r = await api("/v1/recover", { method: "POST", body: JSON.stringify({ older_than_ms: 60000 }) });

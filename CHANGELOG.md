@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+- Console: Payments, Receipts and Audit ledger views on AG Grid Community (sort, filter, quick filter, CSV export, row detail drawer). Receipts are re-verified in the browser; each audit row's hash-chain link is recomputed client-side.
+- Channel3 product search for agents: `search_products` (MCP), `POST /v1/agent/products/search`, owner `POST /v1/products/search` and a console view. Results are capped at the mandate's currency and remaining budget; every search is audited (`catalog.search`).
+- Catalog reference price: PayPal order items with a `channel3:<id>` sku that cost more than 10% above Channel3's cheapest new in-stock offer are held for the user (`catalog_price_above_market`).
+- APIMatic project (`apimatic/`): OpenAPI spec with SDK-friendly operation ids and typed responses, portal config and guides; `npm run apimatic:*` and a CI workflow.
+
+### Changed
+- CSP `img-src` allows `https:` images (product photos in the console). Scripts and connections stay same-origin.
+
 ## [0.1.2] - 2026-11-03
 
 Security and compatibility release, prompted by the M8ven MCP scan. Republished from CI with npm provenance.

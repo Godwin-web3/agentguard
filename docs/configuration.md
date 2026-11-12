@@ -54,6 +54,8 @@ All configuration is environment variables. Nothing is read from a config file.
 | `AGENTGUARD_AGENT_RATE_LIMIT` | `30` | Agent requests per minute per agent id. |
 | `AGENTGUARD_RECOVER_INTERVAL_MS` | `300000` | Maintenance loop interval for long-running servers. |
 | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | — / OpenAI / `gpt-4o-mini` | Optional LLM risk analyzer and mandate drafting (`/v1/mandates/draft-from-text`). Advisory only: it can escalate a payment to a human, never approve one that failed a deterministic check. |
+| `CHANNEL3_API_KEY`, `CHANNEL3_BASE_URL` | — / `https://api.trychannel3.com` | Optional [Channel3 product search](./product-search.md) for agents (`search_products`, `POST /v1/agent/products/search`) and a catalog reference price that can hold an overpriced PayPal order for the user. Discovery only. |
+| `AGENTGUARD_CATALOG_PRICE_TOLERANCE` | `0.10` | Catalog price tolerance before a payment is held. |
 
 ## Clients
 

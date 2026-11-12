@@ -35,6 +35,22 @@ An AI agent can browse, reason and recommend. With AgentGuard it **cannot spend 
 | [`@agentguard-dev/intent-verifier`](packages/intent-verifier) | Merchants: verify receipts offline, build PayPal dispute evidence. Zero dependencies. CLI `intent-verify`. | `npm i @agentguard-dev/intent-verifier` |
 | [`@agentguard-dev/paypal-toolkit`](packages/paypal-toolkit) | Agent builders: wrap [PayPal's Agent Toolkit](https://www.npmjs.com/package/@paypal/agent-toolkit) (Vercel AI SDK, OpenAI, MCP) so money only moves through AgentGuard. | `npm i @agentguard-dev/paypal-toolkit @paypal/agent-toolkit` |
 
+## Sponsor tools
+
+| | What it does in AgentGuard |
+|---|---|
+| [**AG Grid**](https://www.ag-grid.com) (Community, MIT) | The owner console's **Payments**, **Receipts** and **Audit ledger** are AG Grid tables themed from the brand tokens: sort and filter by status, payee, amount, mandate, PayPal order and capture ids; quick filter; CSV export for dispute evidence. Each receipt is re-verified in the browser (Ed25519 issuer signature, passkey over the mandate, order digest), and each audit row's hash-chain link is recomputed client-side (`verified` / `broken`). Click a row for the full record, policy checks and receipt. |
+| [**Channel3**](https://trychannel3.com) | Agents find real products with `search_products` (MCP) / `POST /v1/agent/products/search`, capped at the mandate's currency and remaining budget, each result with an advisory mandate-fit check. Discovery only: payment still goes through a merchant PayPal order that AgentGuard reads from PayPal. For `channel3:<id>` line items, Channel3's cheapest offer is a reference price that can hold an overpriced order for the user's passkey, never approve one. [Guide](https://agentguard-orcin.vercel.app/docs/product-search) |
+| [**APIMatic**](https://www.apimatic.io) | Generated **TypeScript, Python and C# SDKs** ([`apimatic/sdk/`](apimatic/sdk)) and a branded **API portal** at [agentguard-api-portal.vercel.app](https://agentguard-api-portal.vercel.app), from our OpenAPI 3.1 spec (SDK-friendly operation ids, typed decisions, receipts and product results). The TypeScript SDK is smoke-tested against the hosted demo. [Guide](https://agentguard-orcin.vercel.app/docs/sdks) |
+
+```ts
+// APIMatic-generated TypeScript SDK (apimatic/sdk/typescript)
+import { AgentGuardApiClient } from "agent-guard-api";
+const client = new AgentGuardApiClient({ agent: process.env.AGENTGUARD_AGENT_KEY });
+const decision = await client.agent.proposePayment({ body: { mandateId, agentId: "shopper", idempotencyKey: "order-1", paypalOrderId } });
+console.log(decision.status);   // captured | needs_human | rejected
+```
+
 ## Verify a real receipt (1 minute)
 
 ```sh
@@ -92,8 +108,8 @@ What a receipt does **not** prove (fulfilment), what is attested by the issuer r
 | | |
 |---|---|
 | Concepts | [Mandates](https://agentguard-orcin.vercel.app/docs/mandates) · [Passkeys](https://agentguard-orcin.vercel.app/docs/passkeys) · [Payment flow](https://agentguard-orcin.vercel.app/docs/payment-flow) · [Receipts](https://agentguard-orcin.vercel.app/docs/receipts) · [Anchoring](https://agentguard-orcin.vercel.app/docs/anchoring) · [AP2](https://agentguard-orcin.vercel.app/docs/ap2) · [Disputes](https://agentguard-orcin.vercel.app/docs/disputes) |
-| Guides | [Toolkit guard](https://agentguard-orcin.vercel.app/docs/toolkit) · [Merchant verification](https://agentguard-orcin.vercel.app/docs/merchant-verification) · [Dispute evidence](https://agentguard-orcin.vercel.app/docs/dispute-evidence) · [Self-hosting](https://agentguard-orcin.vercel.app/docs/self-hosting) · [Key rotation](https://agentguard-orcin.vercel.app/docs/key-rotation) |
-| Reference | [HTTP API](https://agentguard-orcin.vercel.app/docs/api) ([openapi.json](https://agentguard-orcin.vercel.app/openapi.json)) · [CLI](https://agentguard-orcin.vercel.app/docs/cli) · [Package API](https://agentguard-orcin.vercel.app/docs/packages) · [Configuration](https://agentguard-orcin.vercel.app/docs/configuration) |
+| Guides | [Toolkit guard](https://agentguard-orcin.vercel.app/docs/toolkit) · [Product search (Channel3)](https://agentguard-orcin.vercel.app/docs/product-search) · [Merchant verification](https://agentguard-orcin.vercel.app/docs/merchant-verification) · [Dispute evidence](https://agentguard-orcin.vercel.app/docs/dispute-evidence) · [Self-hosting](https://agentguard-orcin.vercel.app/docs/self-hosting) · [Key rotation](https://agentguard-orcin.vercel.app/docs/key-rotation) |
+| Reference | [HTTP API](https://agentguard-orcin.vercel.app/docs/api) ([openapi.json](https://agentguard-orcin.vercel.app/openapi.json)) · [SDKs (APIMatic)](https://agentguard-orcin.vercel.app/docs/sdks) · [CLI](https://agentguard-orcin.vercel.app/docs/cli) · [Package API](https://agentguard-orcin.vercel.app/docs/packages) · [Configuration](https://agentguard-orcin.vercel.app/docs/configuration) |
 
 The docs source is in [`docs/`](docs); every page has an edit link.
 
@@ -104,7 +120,8 @@ The docs source is in [`docs/`](docs); every page has an edit link.
 | `src/` | Gateway: policy engine, PayPal rail, passkeys, receipts, audit chain, HTTP server, MCP server |
 | `packages/intent-verifier` | Offline verifier + CLI (published) |
 | `packages/paypal-toolkit` | PayPal Agent Toolkit guard (published) |
-| `web/` | Landing page, owner console, receipt viewer, brand page |
+| `web/` | Landing page, owner console (AG Grid views), receipt viewer, brand page |
+| `apimatic/` | APIMatic project (spec, portal config, guides) and the generated SDKs in `apimatic/sdk/` |
 | `docs/` | Documentation site and OpenAPI source |
 | `db/postgres.sql` | Postgres schema (RLS on, append-only audit) |
 | `scripts/` | Builds, sandbox end-to-end scripts, dev passkey, key rotation |

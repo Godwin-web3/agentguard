@@ -12,7 +12,8 @@ import { HeuristicRiskAnalyzer, LLMRiskAnalyzer, CompositeRiskAnalyzer, type Ris
 import { PayPalClient, lazyPayPalRail, type PaymentRail } from "./paypal.ts";
 import { draftFromText, summarize, type LLMConfig } from "./drafter.ts";
 import { siteFile } from "./site.ts";
-import { canonical } from "./canonical.ts";
+import { canonical, fromMinor } from "./canonical.ts";
+import { Channel3Client, CatalogPriceAnalyzer, CatalogError, mandateFit, spendCeiling } from "./catalog.ts";
 
 export interface App {
   handler: (rq: IncomingMessage, res: ServerResponse) => Promise<unknown>;
@@ -39,10 +40,12 @@ let paypal: PayPalClient | null = null;
 const pp = () => (paypal ??= new PayPalClient());
 const rail: PaymentRail = lazyPayPalRail(pp);
 
-const risk: RiskAnalyzer = process.env.LLM_API_KEY
-  ? new CompositeRiskAnalyzer(new HeuristicRiskAnalyzer(), new LLMRiskAnalyzer({ baseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
-      apiKey: process.env.LLM_API_KEY, model: process.env.LLM_MODEL ?? "gpt-4o-mini" }))
-  : new HeuristicRiskAnalyzer();
+// Channel3 product catalog: discovery for agents plus an independent reference price (advisory; can only escalate).
+const channel3 = new Channel3Client();
+const risk: RiskAnalyzer = new CompositeRiskAnalyzer(new HeuristicRiskAnalyzer(),
+  ...(process.env.LLM_API_KEY ? [new LLMRiskAnalyzer({ baseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
+      apiKey: process.env.LLM_API_KEY, model: process.env.LLM_MODEL ?? "gpt-4o-mini" })] : []),
+  ...(channel3.configured ? [new CatalogPriceAnalyzer(channel3)] : []));
 
 const llm: LLMConfig | undefined = process.env.LLM_API_KEY
   ? { baseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1", apiKey: process.env.LLM_API_KEY, model: process.env.LLM_MODEL ?? "gpt-4o-mini" } : undefined;
@@ -246,11 +249,36 @@ route("GET", "/v1/audit/attestation", "admin", async () => {
   return { statement, signature: signer.sign(canonical(statement)), alg: "Ed25519", kid: signer.activeKid(), key: "/.well-known/agentguard-keys" };
 });
 
+// ---- product discovery (Channel3). Results are bounded by the mandate; paying still needs a merchant PayPal order. ----
+async function productSearch(mandateId: string, body: any, by: string) {
+  const v = await gw.mandateView(mandateId);
+  if (v.status !== "active") throw new GatewayError(409, `mandate is ${v.status}; only an active, passkey-signed mandate can shop`);
+  const query = String(body?.query ?? "").trim().slice(0, 300);
+  if (!query && !body?.page_token) throw new GatewayError(400, "query is required");
+  const c = v.mandate.constraints, used = Number(v.spend.spent_minor) + Number(v.spend.reserved_minor ?? 0);
+  const ceiling = spendCeiling(c, used);
+  let r;
+  try { r = await channel3.search({ query, limit: Number(body?.limit ?? 8), max_price: fromMinor(ceiling), currency: c.currency, page_token: body?.page_token, user_id: v.mandate.user_id }); }
+  catch (e) { if (e instanceof CatalogError) throw new GatewayError(e.code, e.message); throw e; }
+  const products = r.products.map(p => ({ ...p, mandate_fit: mandateFit(c, used, Number(v.spend.tx_count), p.best_offer) }));
+  await store.audit("catalog.search", mandateId, { by, provider: "channel3", query, results: products.length, fitting: products.filter(p => p.mandate_fit.fits).length, max_price: fromMinor(ceiling), currency: c.currency });
+  return { provider: "channel3", mandate_id: mandateId, query, max_price: fromMinor(ceiling), currency: c.currency, products, next_page_token: r.next_page_token,
+    how_to_pay: `Ask the merchant for a PayPal order (intent AUTHORIZE) with the product_id as the item sku, then call pay_paypal_order. AgentGuard reads the order from PayPal and checks it against the mandate; the catalog price is only a reference.` };
+}
+route("POST", "/v1/products/search", "admin", async ({ body }) => productSearch(req(body, "mandate_id"), body, "owner"));
+route("GET", "/v1/products/status", "admin", async () => ({ provider: "channel3", configured: channel3.configured, base_url: channel3.baseUrl }));
+
 // ---- agent (holds only its own API key; never PayPal credentials) ----
 route("GET", "/v1/agent/mandates/:id", "agent", async ({ params, agent }) => {
   const v = await gw.mandateView(params[0]);
   if (v.mandate.agent_id !== agent!.agent_id) throw new GatewayError(404, "mandate not found");
   return { mandate: v.mandate, status: v.status, spend: v.spend };
+});
+route("POST", "/v1/agent/products/search", "agent", async ({ body, agent }) => {
+  const id = req(body, "mandate_id"); const v = await gw.mandateView(id);
+  if (v.mandate.agent_id !== agent!.agent_id) throw new GatewayError(404, "mandate not found");
+  if (!(await checkRate(agent!.agent_id))) throw new GatewayError(429, "rate limit exceeded");
+  return productSearch(id, body, agent!.agent_id);
 });
 route("POST", "/v1/agent/payments", "agent", async ({ body, agent }) => {
   if (!(await checkRate(agent!.agent_id))) throw new GatewayError(429, "rate limit exceeded");
