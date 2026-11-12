@@ -3,7 +3,7 @@ const S = (props, required = []) => ({ type: "object", properties: props, ...(re
 const str = (d, ex) => ({ type: "string", ...(d ? { description: d } : {}), ...(ex !== undefined ? { example: ex } : {}) });
 const obj = d => ({ type: "object", additionalProperties: true, ...(d ? { description: d } : {}) });
 const nstr = d => ({ type: ["string", "null"], ...(d ? { description: d } : {}) });
-const nref = (r, d) => ({ anyOf: [{ $ref: `#/components/schemas/${r}` }, { type: "null" }], ...(d ? { description: d } : {}) });
+const nref = (r, d) => ({ oneOf: [{ $ref: `#/components/schemas/${r}` }, { type: "null" }], ...(d ? { description: d } : {}) });
 const int = d => ({ type: "integer", ...(d ? { description: d } : {}) });
 const bool = d => ({ type: "boolean", ...(d ? { description: d } : {}) });
 const assertion = obj("WebAuthn assertion (navigator.credentials.get response, JSON-encoded) over the challenge returned by the matching *-request call");
@@ -108,8 +108,15 @@ const TAGS = {
   Agent: "Calls an agent makes with its own key: product search, payments, receipts", Catalog: "Channel3 product search for the owner",
   Payments: "Payment log and crash recovery", Control: "Operator kill-switch", Audit: "Hash-chained audit ledger, attestations and anchors",
 };
+// Short operation titles for SDK/portal generators, where the long summary has punctuation they reject. The long text stays the description.
+const TITLES = {
+  "GET /health": "Health check", "GET /.well-known/agentguard-keys": "Get issuer key set",
+  "POST /v1/enroll/options": "Get passkey registration options", "POST /v1/enroll": "Register a passkey",
+  "POST /v1/agent/payments": "Propose a payment", "GET /v1/payments/stuck": "List stuck payments",
+};
+const title = id => id && id.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().replace(/^./, c => c.toUpperCase()).replace(/\b(api|url|id|ap2|rfc)\b/gi, w => w.toUpperCase());
 const SEC = { admin: [{ admin: [] }], agent: [{ agent: [] }], cron: [{ cron: [] }], none: [] };
-const errorResp = d => ({ description: d, content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } });
+const errorResp = d => ({ description: d, content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } });
 
 export function buildOpenApi(version) {
   const paths = {};
@@ -119,7 +126,7 @@ export function buildOpenApi(version) {
     const op = {
       operationId: OPS[`${method} ${path}`] ?? (method + path).toLowerCase().replace(/[{}]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/_$/, ""),
       description: summary,
-      tags: [tag], summary, security: SEC[auth], ...(params.length ? { parameters: params } : {}),
+      tags: [tag], summary: TITLES[`${method} ${path}`] ?? title(OPS[`${method} ${path}`]) ?? summary, security: SEC[auth], ...(params.length ? { parameters: params } : {}),
       ...(x.body ? { requestBody: { required: (x.body.required ?? []).length > 0, content: { "application/json": { schema: x.body } } } } : {}),
       responses: { 200: method === "HEAD" ? { description: "OK" } : { description: "OK", content: { "application/json": { schema: resSchema(`${method} ${path}`) } } },
         400: errorResp("Bad request"), ...(auth !== "none" ? { 401: errorResp("Missing or wrong bearer token") } : {}), 404: errorResp("Not found"), 413: errorResp("Body over 256 KB"),
@@ -144,8 +151,8 @@ export function buildOpenApi(version) {
           allowed_categories: { type: "array", items: { enum: ["PHYSICAL_GOODS", "DIGITAL_GOODS", "DONATION", "UNSPECIFIED"] } }, payee_allowlist: { type: "array", items: { type: "string" } },
           payee_blocklist: { type: "array", items: { type: "string" } }, max_quantity_per_item: int(), require_human_approval_over: str(), require_merchant_order: bool(),
           sku_allowlist: { type: "array", items: { type: "string" } } }, ["currency", "max_total", "max_transactions"]),
-        Error: { type: "object", properties: { error: { type: "string" } }, required: ["error"] },
-        Health: S({ ok: bool(), stuck: int("Payments stuck in reserved/authorized for over a minute"), last_recovery: { anyOf: [obj("Last reconciliation run"), { type: "null" }] } }, ["ok", "stuck"]),
+        ErrorResponse: { type: "object", description: "Every non-2xx response", properties: { error: { type: "string", description: "What went wrong", example: "unauthorized" } }, required: ["error"] },
+        Health: S({ ok: bool(), stuck: int("Payments stuck in reserved/authorized for over a minute"), last_recovery: { type: ["object", "null"], additionalProperties: true, description: "Last reconciliation run" } }, ["ok", "stuck"]),
         AgentCredentials: S({ agent_id: str(), api_key: str("Shown once; store it as the agent's secret") }, ["agent_id", "api_key"]),
         Check: S({ check: str(undefined, "per_transaction_limit"), pass: bool(), detail: str() }, ["check", "pass", "detail"]),
         RiskSignal: S({ signal: str(undefined, "catalog_price_above_market"), severity: { type: "string", enum: ["low", "medium", "high"] }, detail: str() }, ["signal", "severity", "detail"]),

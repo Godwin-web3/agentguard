@@ -6,6 +6,8 @@ on:
   push:
     branches: [main]
     paths: ["docs/openapi.mjs", "apimatic/**", ".github/workflows/apimatic.yml"]
+  pull_request:
+    paths: ["docs/openapi.mjs", "apimatic/**", ".github/workflows/apimatic.yml"]
 permissions: { contents: read }
 jobs:
   apimatic:
@@ -15,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+        with: { node-version: 24 }
       - name: Spec is in sync with docs/openapi.mjs
         run: node scripts/apimatic-spec.mjs && git diff --exit-code apimatic/src/spec/openapi.json
       - name: No APIMatic key
@@ -23,13 +25,16 @@ jobs:
         run: echo "::notice::Set the APIMATIC_API_KEY secret to validate the spec and generate SDKs and the portal with APIMatic."
       - name: Validate (APIMatic)
         if: env.APIMATIC_API_KEY != ''
-        run: npx -y @apimatic/cli@2 api validate --file apimatic/src/spec/openapi.json --auth-key "$APIMATIC_API_KEY"
-      - name: Generate SDKs (TypeScript, Python)
+        run: npx -y @apimatic/cli@2 api validate --input apimatic --auth-key "$APIMATIC_API_KEY"
+      - name: Generate SDKs (TypeScript, Python, C#)
         if: env.APIMATIC_API_KEY != ''
         run: |
-          for l in typescript python; do
+          for l in typescript python csharp; do
             npx -y @apimatic/cli@2 sdk generate --input apimatic --language $l --destination apimatic/sdk/$l --force --auth-key "$APIMATIC_API_KEY"
           done
+      - name: Smoke-test the TypeScript SDK against the hosted demo
+        if: env.APIMATIC_API_KEY != ''
+        run: cd apimatic/sdk/typescript && npm install --no-audit --no-fund && npm run build && cd ../../.. && node apimatic/examples/smoke.mjs
       - name: Generate API portal
         if: env.APIMATIC_API_KEY != ''
         run: npx -y @apimatic/cli@2 portal generate --input apimatic --destination apimatic/portal --force --auth-key "$APIMATIC_API_KEY"

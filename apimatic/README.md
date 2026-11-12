@@ -23,9 +23,16 @@ APIMatic needs an account (free trial at <https://app.apimatic.io/account/regist
 npx -y @apimatic/cli@2 auth login              # or: export APIMATIC_API_KEY=… and pass --auth-key "$APIMATIC_API_KEY"
 npm run spec:apimatic                          # refresh apimatic/src/spec/openapi.json
 npm run apimatic:validate                      # APIMatic validation + linting
-npm run apimatic:sdk                           # apimatic/sdk/typescript, apimatic/sdk/python
-npm run apimatic:portal                        # static portal in apimatic/portal (host anywhere)
+npm run apimatic:sdk                           # apimatic/sdk/typescript, python, csharp
+npm run apimatic:smoke                         # build the TypeScript SDK, call the hosted demo
+npm run apimatic:portal                        # static portal in apimatic/portal
 ```
 
 CI: `.github/workflows/apimatic.yml` runs the same steps when the `APIMATIC_API_KEY` repository secret is set and uploads
 the SDKs and portal as a build artifact.
+
+## Published
+
+- Portal: https://agentguard-api-portal.vercel.app (the `api-portal` branch holds the static build; a separate Vercel project serves it)
+- SDKs: `apimatic/sdk/typescript`, `apimatic/sdk/python`, `apimatic/sdk/csharp` (also downloadable from the portal)
+- Smoke test: `apimatic/examples/smoke.mjs`

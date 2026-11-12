@@ -41,7 +41,15 @@ An AI agent can browse, reason and recommend. With AgentGuard it **cannot spend 
 |---|---|
 | [**AG Grid**](https://www.ag-grid.com) (Community, MIT) | The owner console's **Payments**, **Receipts** and **Audit ledger** are AG Grid tables themed from the brand tokens: sort and filter by status, payee, amount, mandate, PayPal order and capture ids; quick filter; CSV export for dispute evidence. Each receipt is re-verified in the browser (Ed25519 issuer signature, passkey over the mandate, order digest), and each audit row's hash-chain link is recomputed client-side (`verified` / `broken`). Click a row for the full record, policy checks and receipt. |
 | [**Channel3**](https://trychannel3.com) | Agents find real products with `search_products` (MCP) / `POST /v1/agent/products/search`, capped at the mandate's currency and remaining budget, each result with an advisory mandate-fit check. Discovery only: payment still goes through a merchant PayPal order that AgentGuard reads from PayPal. For `channel3:<id>` line items, Channel3's cheapest offer is a reference price that can hold an overpriced order for the user's passkey, never approve one. [Guide](https://agentguard-orcin.vercel.app/docs/product-search) |
-| [**APIMatic**](https://www.apimatic.io) | The OpenAPI 3.1 spec (SDK-friendly operation ids, typed agent responses) is an APIMatic project in [`apimatic/`](apimatic) that generates TypeScript, Python and C# SDKs and a branded API portal; CI runs it with an `APIMATIC_API_KEY` secret. [Guide](https://agentguard-orcin.vercel.app/docs/sdks) |
+| [**APIMatic**](https://www.apimatic.io) | Generated **TypeScript, Python and C# SDKs** ([`apimatic/sdk/`](apimatic/sdk)) and a branded **API portal** at [agentguard-api-portal.vercel.app](https://agentguard-api-portal.vercel.app), from our OpenAPI 3.1 spec (SDK-friendly operation ids, typed decisions, receipts and product results). The TypeScript SDK is smoke-tested against the hosted demo. [Guide](https://agentguard-orcin.vercel.app/docs/sdks) |
+
+```ts
+// APIMatic-generated TypeScript SDK (apimatic/sdk/typescript)
+import { AgentGuardApiClient } from "agent-guard-api";
+const client = new AgentGuardApiClient({ agent: process.env.AGENTGUARD_AGENT_KEY });
+const decision = await client.agent.proposePayment({ body: { mandateId, agentId: "shopper", idempotencyKey: "order-1", paypalOrderId } });
+console.log(decision.status);   // captured | needs_human | rejected
+```
 
 ## Verify a real receipt (1 minute)
 
@@ -113,7 +121,7 @@ The docs source is in [`docs/`](docs); every page has an edit link.
 | `packages/intent-verifier` | Offline verifier + CLI (published) |
 | `packages/paypal-toolkit` | PayPal Agent Toolkit guard (published) |
 | `web/` | Landing page, owner console (AG Grid views), receipt viewer, brand page |
-| `apimatic/` | APIMatic project: OpenAPI spec, portal config and guides for SDK/portal generation |
+| `apimatic/` | APIMatic project (spec, portal config, guides) and the generated SDKs in `apimatic/sdk/` |
 | `docs/` | Documentation site and OpenAPI source |
 | `db/postgres.sql` | Postgres schema (RLS on, append-only audit) |
 | `scripts/` | Builds, sandbox end-to-end scripts, dev passkey, key rotation |
