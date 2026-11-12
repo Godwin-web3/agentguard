@@ -1,0 +1,83 @@
+# Docs
+
+- Home
+  - [AgentGuard API](/): Let AI agents pay through PayPal only within limits the user signed with a passkey.
+  - [Verify a receipt](/proof-of-intent): Every captured payment has a signed receipt a merchant or PayPal can check offline.
+  - API Reference
+    - Meta: Health and liveness
+      - [Health check](/api/openapi/meta/getHealth): Health: ok, stuck payment count, last recovery run
+      - [Get liveness](/api/openapi/meta/getLiveness): Liveness probe (plain 200)
+      - [Head liveness](/api/openapi/meta/headLiveness): Liveness probe, no body
+    - Jobs: Scheduled jobs (Bearer CRON_SECRET)
+      - [Run anchor job](/api/openapi/jobs/runAnchorJob): Timestamp pending receipts and anchor the audit head (Bearer CRON_SECRET)
+      - [Run anchor job post](/api/openapi/jobs/runAnchorJobPost): Same as GET, for pg_net callers
+      - [Run maintenance job](/api/openapi/jobs/runMaintenanceJob): Expire recovery locks, retry notifications, converge stuck payments
+      - [Run maintenance job post](/api/openapi/jobs/runMaintenanceJobPost): Same as GET, for pg_net callers
+    - Keys: Issuer signing keys: publish, rotate, mark compromised
+      - [Get issuer key](/api/openapi/keys/getIssuerKey): Active issuer public key (legacy single-key form)
+      - [Get issuer key set](/api/openapi/keys/getIssuerKeySet): Issuer key set: every key with kid, status, created_at, retired_at, compromised_at. Pin this.
+      - [Rotate issuer key](/api/openapi/keys/rotateIssuerKey): Retire the active issuer key and create a new one (audited)
+      - [Mark key compromised](/api/openapi/keys/markKeyCompromised): Mark a key compromised as of `at` (rotates first if active)
+    - Receipts: Signed Proof-of-Intent receipts for captured payments
+      - [Get public receipt](/api/openapi/receipts/getPublicReceipt): Public receipt lookup (only when AGENTGUARD_PUBLIC_RECEIPTS=1)
+      - [Get payment receipt](/api/openapi/receipts/getPaymentReceipt): Receipt for a payment
+      - [List receipts](/api/openapi/receipts/listReceipts): List receipts
+      - [Get receipt](/api/openapi/receipts/getReceipt): Receipt by id
+    - Setup: Agents and PayPal wallet vaulting
+      - [Register agent](/api/openapi/setup/registerAgent): Register an agent and return its API key (shown once)
+      - [Start wallet setup](/api/openapi/setup/startWalletSetup): Start PayPal wallet vaulting; returns the setup token with the buyer consent link
+      - [Complete wallet setup](/api/openapi/setup/completeWalletSetup): PayPal redirect target after buyer consent; links the vaulted wallet
+      - [Link wallet](/api/openapi/setup/linkWallet): Link an existing PayPal vault id to a user
+    - Mandates: Spending mandates the user signs with a passkey
+      - [List mandates](/api/openapi/mandates/listMandates): List mandates with spend state and summary
+      - [Create mandate](/api/openapi/mandates/createMandate): Create a draft mandate from structured constraints
+      - [Draft mandate from text](/api/openapi/mandates/draftMandateFromText): Draft a mandate from plain English (model proposes, deterministic parser bounds it)
+      - [Get mandate](/api/openapi/mandates/getMandate): Mandate, status and spend
+      - [Get mandate signing options](/api/openapi/mandates/getMandateSigningOptions): Get WebAuthn options whose challenge is the mandate hash
+      - [Confirm mandate](/api/openapi/mandates/confirmMandate): Activate a mandate with the user's passkey assertion
+      - [Get mandate revocation options](/api/openapi/mandates/getMandateRevocationOptions): Get WebAuthn options for revocation
+      - [Revoke mandate](/api/openapi/mandates/revokeMandate): Revoke with the user's passkey (drafts can be discarded without one)
+    - Passkeys: Passkey enrollment, re-enrollment and time-locked recovery
+      - [Get user passkey](/api/openapi/passkeys/getUserPasskey): Whether the user has a passkey, and its credential id
+      - [Create enrollment link](/api/openapi/passkeys/createEnrollmentLink): Issue a single-use enrollment link (15 min default)
+      - [Get passkey registration options](/api/openapi/passkeys/getEnrollmentOptions): Redeem step 1: registration options for an enrollment token
+      - [Register a passkey](/api/openapi/passkeys/enrollPasskey): Redeem step 2: register the passkey
+      - [Get reenrollment options](/api/openapi/passkeys/getReenrollmentOptions): Options for replacing a passkey with the current one
+      - [Reenroll passkey](/api/openapi/passkeys/reenrollPasskey): Mint a re-enrollment token authorized by the current passkey
+      - [Get recovery state](/api/openapi/passkeys/getRecoveryState): Time-locked recovery state
+      - [Get recovery cancel options](/api/openapi/passkeys/getRecoveryCancelOptions): Options to cancel a recovery with the current passkey
+      - [Cancel recovery](/api/openapi/passkeys/cancelRecovery): Cancel a pending recovery
+    - Approvals: Payments held for the user's passkey approval
+      - [List approvals](/api/openapi/approvals/listApprovals): Payments held for the owner
+      - [Get approval options](/api/openapi/approvals/getApprovalOptions): Approval statement and WebAuthn options (5-minute nonce)
+      - [Resolve approval](/api/openapi/approvals/resolveApproval): Approve or deny with the user's passkey. The admin token alone is refused.
+    - Agent: Calls an agent makes with its own key: product search, payments, receipts
+      - [Propose a payment](/api/openapi/agent/proposePayment): Propose a payment (30/min per agent; 429 above)
+      - [Search products](/api/openapi/agent/searchProducts): Search the Channel3 product catalog within the mandate's currency and remaining budget (discovery only; never pays)
+      - [Get agent payment](/api/openapi/agent/getAgentPayment): Payment status (the calling agent's own only)
+      - [Get agent payment receipt](/api/openapi/agent/getAgentPaymentReceipt): Proof-of-Intent receipt for a captured payment
+      - [Get agent mandate](/api/openapi/agent/getAgentMandate): The agent's own mandate, status and spend
+    - Catalog: Channel3 product search for the owner
+      - [Search products for mandate](/api/openapi/catalog/searchProductsForMandate): Owner view of the same Channel3 search, with an advisory mandate-fit check per product
+      - [Get product search status](/api/openapi/catalog/getProductSearchStatus): Whether Channel3 product search is configured (CHANNEL3_API_KEY)
+    - Payments: Payment log and crash recovery
+      - [List payments](/api/openapi/payments/listPayments): List payments
+      - [List stuck payments](/api/openapi/payments/listStuckPayments): Payments in reserved/authorized older than a threshold
+      - [Recover payments](/api/openapi/payments/recoverPayments): Converge stuck payments with PayPal now
+    - Control: Operator kill-switch
+      - [Get pause state](/api/openapi/control/getPauseState): Kill-switch state
+      - [Pause](/api/openapi/control/pause): Block every new proposal and approval (503)
+      - [Resume](/api/openapi/control/resume): Lift the kill-switch
+    - Audit: Hash-chained audit ledger, attestations and anchors
+      - [List audit entries](/api/openapi/audit/listAuditEntries): Hash-chained audit log
+      - [Verify audit chain](/api/openapi/audit/verifyAuditChain): Recompute and verify the whole chain
+      - [Get audit attestation](/api/openapi/audit/getAuditAttestation): Chain head signed with the active issuer key
+      - [Anchor audit chain](/api/openapi/audit/anchorAuditChain): Anchor the chain head now (RFC 6962 Merkle root, RFC 3161 stamped)
+      - [List audit anchors](/api/openapi/audit/listAuditAnchors): Published anchors; keep copies to detect forks
+  - Context Plugin
+    - [Context Plugin](/context-plugin): Give your AI coding assistant working knowledge of this API's SDKs.
+  - SDKs
+    - [SDKs](/sdks): Client libraries for this API.
+    - [TypeScript SDK](/sdks/typescript): Install and start using the TypeScript SDK.
+    - [Python SDK](/sdks/python): Install and start using the Python SDK.
+    - [C# SDK](/sdks/csharp): Install and start using the C# SDK.

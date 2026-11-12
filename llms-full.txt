@@ -1,0 +1,584 @@
+# AgentGuard API (/)
+
+AgentGuard sits between an AI agent and PayPal. The user signs a **spending mandate** (budget, payees, categories, SKUs, an approval threshold) with their passkey. The agent holds only an AgentGuard key. Every payment it proposes is checked deterministically against the signed mandate, using PayPal's own order as the source of truth, and then paid, rejected, or held for the user's passkey approval. Each captured payment gets an Ed25519-signed **Proof-of-Intent receipt** that anyone can verify offline.
+
+## Who calls what [#who-calls-what]
+
+| Caller | Auth | Typical calls |
+| --- | --- | --- |
+| Agent | `Authorization: Bearer ag_…` (agent key) | `searchProducts`, `proposePayment`, `getAgentPayment`, `getAgentPaymentReceipt`, `getAgentMandate` |
+| Owner / console | `Authorization: Bearer <admin token>` | mandates, approvals, payments, receipts, audit ledger |
+| Anyone | none | `getIssuerKeySet`, `listAuditAnchors`, `getHealth` |
+
+The admin token can read and draft, but it **cannot authorize spending**: activating a mandate, approving a held payment and revoking all need the user's passkey (WebAuthn).
+
+## An agent purchase in three calls [#an-agent-purchase-in-three-calls]
+
+1. `searchProducts` finds real products through the Channel3 catalog, already capped at the mandate's currency and remaining budget.
+2. The merchant creates a PayPal order (intent `AUTHORIZE`) with the product id as the item `sku`.
+3. `proposePayment` with `paypal_order_id`. AgentGuard reads the order from PayPal, checks it against the mandate, and returns `captured`, `rejected` or `needs_human`.
+
+Sandbox server: `https://agentguard-orcin.vercel.app` (PayPal sandbox). Full docs: [agentguard-orcin.vercel.app/docs](https://agentguard-orcin.vercel.app/docs).
+
+
+# Verify a receipt (/proof-of-intent)
+
+`getAgentPaymentReceipt` (agent) and `getReceipt` (owner) return a `ReceiptEnvelope`: the receipt body and an Ed25519 signature from the AgentGuard issuer key.
+
+The receipt binds together:
+
+- the user's mandate and the passkey (WebAuthn) signature over its hash,
+- the PayPal order snapshot AgentGuard evaluated and its digest,
+- the policy decision and every check it ran,
+- the PayPal capture id, plus RFC 3161 timestamps and the audit-chain anchor.
+
+Pin the issuer key set from `getIssuerKeySet` (`/.well-known/agentguard-keys`) and verify with `@agentguard-dev/intent-verifier`:
+
+```sh
+npx -p @agentguard-dev/intent-verifier intent-verify receipt.json --issuer-keys agentguard-keys.json
+```
+
+Any edit to the receipt (amount, payee, mandate limits, order) breaks the issuer signature.
+
+
+# Context Plugin (/context-plugin)
+
+The context plugin teaches your AI coding assistant how to use this API's SDKs, so the code it writes for you calls the API the way the SDKs are meant to be used.
+
+## Install [#install]
+
+```bash
+npx context-plugins install "/__downloads/plugin.zip"
+```
+
+## What it does [#what-it-does]
+
+Once the plugin is installed, describe what you want to build and your assistant works from the SDK for your language: how to install it and create a client, how to authenticate, and which methods and types to use for each call. You spend less time correcting code written from guesses about the API.
+
+## Supported languages [#supported-languages]
+
+- TypeScript
+- Python
+- C#
+
+## Supported platforms [#supported-platforms]
+
+- Claude Code
+- Cursor
+- GitHub Copilot
+
+# C# SDK (/sdks/csharp)
+
+[Download SDK](/__downloads/sdk/csharp.zip)
+
+## Intro [#intro]
+
+The AgentGuard API SDK provides access to the AgentGuard API REST APIs.
+
+Financial authorization gateway for AI agents paying through PayPal. Errors are `{"error": string}`. Responses are JSON with `cache-control: no-store`. Docs: https://agentguard-orcin.vercel.app/docs
+
+## Installation [#installation]
+
+Add the SDK as a project reference into your solution:
+
+```bash
+dotnet add reference <path-to-sdk>/src/AgentGuardApi/AgentGuardApi.csproj
+```
+
+The project takes its build settings from the files around it, so reference it in place.
+
+## Quick Start [#quick-start]
+
+### Dependency Injection [#dependency-injection]
+
+Register the client with `IServiceCollection` and resolve it from the container. The `HttpClient` is managed by `IHttpClientFactory`. Configure the client's behavior through `AgentGuardApiClientOptions`.
+
+```csharp
+services.AddAgentGuardApiClient(options =>
+{
+    options.Admin = "YOUR_BEARER_TOKEN";
+    options.Agent = "YOUR_BEARER_TOKEN";
+    options.Cron = "YOUR_BEARER_TOKEN";
+    options.Environment = ServerEnvironment.Production;
+    // TODO: configure more client options here
+});
+```
+
+### Direct Instantiation [#direct-instantiation]
+
+Create the client by passing an `HttpClient` you manage yourself. Configure the client's behavior through `AgentGuardApiClientOptions`.
+
+```csharp
+var httpClient = new HttpClient();
+// TODO: configure more client options here
+var options = new AgentGuardApiClientOptions
+{
+    Admin = "YOUR_BEARER_TOKEN",
+    Agent = "YOUR_BEARER_TOKEN",
+    Cron = "YOUR_BEARER_TOKEN",
+    Environment = ServerEnvironment.Production,
+};
+var client = new AgentGuardApiClient(httpClient, options);
+```
+
+# SDKs (/sdks)
+
+- [TypeScript](/sdks/typescript): [Download SDK](/__downloads/sdk/typescript.zip)
+- [Python](/sdks/python): [Download SDK](/__downloads/sdk/python.zip)
+- [C#](/sdks/csharp): [Download SDK](/__downloads/sdk/csharp.zip)
+
+# Python SDK (/sdks/python)
+
+[Download SDK](/__downloads/sdk/python.zip)
+
+## Intro [#intro]
+
+The AgentGuard API SDK provides access to the AgentGuard API REST APIs.
+
+Financial authorization gateway for AI agents paying through PayPal. Errors are `{"error": string}`. Responses are JSON with `cache-control: no-store`. Docs: https://agentguard-orcin.vercel.app/docs
+
+## Installation [#installation]
+
+Add the SDK to your project from its folder, with whichever package manager your project uses. Give each tool a path containing a slash, such as `../agent-guard-api` — a bare folder name is looked up on PyPI instead, and resolves to whatever project holds that name there:
+
+```bash
+pip install <path-to-sdk>
+```
+
+```bash
+uv add <path-to-sdk>
+```
+
+```bash
+poetry add <path-to-sdk>
+```
+
+## Quick Start [#quick-start]
+
+### Synchronous client [#synchronous-client]
+
+Construct `AgentGuardApiClient` with keyword arguments, and call `close()` when you are done. Every argument is optional.
+
+```python
+from agent_guard_api import AgentGuardApiClient
+
+client = AgentGuardApiClient(
+    admin="YOUR_BEARER_TOKEN", agent="YOUR_BEARER_TOKEN", cron="YOUR_BEARER_TOKEN", environment="production"
+)
+
+client.close()
+```
+
+Alternatively, scope it — `with AgentGuardApiClient(...) as client:` closes the pool on exit.
+
+### Asynchronous client [#asynchronous-client]
+
+`AsyncAgentGuardApiClient` mirrors `AgentGuardApiClient` with **identical method names**, and every endpoint method is a coroutine. It takes the same arguments, with some differences — for example, the transport argument is `custom_async_http_client`.
+
+```python
+from asyncio import run
+
+from agent_guard_api import AsyncAgentGuardApiClient
+
+async def main() -> None:
+    client = AsyncAgentGuardApiClient(
+        admin="YOUR_BEARER_TOKEN", agent="YOUR_BEARER_TOKEN", cron="YOUR_BEARER_TOKEN", environment="production"
+    )
+    await client.aclose()
+
+run(main())
+```
+
+Alternatively, scope it — `async with AsyncAgentGuardApiClient(...) as client:` closes the pool on exit.
+
+# TypeScript SDK (/sdks/typescript)
+
+[Download SDK](/__downloads/sdk/typescript.zip)
+
+## Intro [#intro]
+
+The AgentGuard API SDK provides access to the AgentGuard API REST APIs.
+
+Financial authorization gateway for AI agents paying through PayPal. Errors are `{"error": string}`. Responses are JSON with `cache-control: no-store`. Docs: https://agentguard-orcin.vercel.app/docs
+
+## Installation [#installation]
+
+The SDK compiles to `dist/` before it can be referenced — run its `build` script once in the SDK folder, then add it to your project by path:
+
+```bash
+npm install <path-to-sdk>
+```
+
+## Quick Start [#quick-start]
+
+Create one client and reuse it. Configure its behaviour through `ClientOptions`.
+
+```ts
+import { AgentGuardApiClient, ServerEnvironment } from "agent-guard-api";
+
+const client = new AgentGuardApiClient({
+  serverEnvironment: ServerEnvironment.Production,
+  admin: "YOUR_BEARER_TOKEN",
+  agent: "YOUR_BEARER_TOKEN",
+  cron: "YOUR_BEARER_TOKEN",
+});
+```
+
+Nothing in `ClientOptions` is required — `new AgentGuardApiClient()` compiles — and each option left out falls back to its default. `serverEnvironment` is spelled out above so the environment a call reaches is visible where the client is built rather than inherited silently.
+
+### From CommonJS [#from-commonjs]
+
+The package ships both dialects from a single entry, so `require` works with full types. In a TypeScript CommonJS file use the `import ... = require(...)` form — a plain destructuring `require` runs fine but gives you `any`.
+
+```ts
+import sdk = require("agent-guard-api");
+
+const client = new sdk.AgentGuardApiClient({
+  serverEnvironment: sdk.ServerEnvironment.Production,
+  admin: "YOUR_BEARER_TOKEN",
+  agent: "YOUR_BEARER_TOKEN",
+  cron: "YOUR_BEARER_TOKEN",
+});
+```
+
+# Health check (/api/openapi/meta/getHealth)
+
+`GET /health`
+
+Health: ok, stuck payment count, last recovery run
+
+# Get liveness (/api/openapi/meta/getLiveness)
+
+`GET /healthz`
+
+Liveness probe (plain 200)
+
+# Head liveness (/api/openapi/meta/headLiveness)
+
+`HEAD /healthz`
+
+Liveness probe, no body
+
+# Run anchor job (/api/openapi/jobs/runAnchorJob)
+
+`GET /api/cron/anchor`
+
+Timestamp pending receipts and anchor the audit head (Bearer CRON_SECRET)
+
+# Run anchor job post (/api/openapi/jobs/runAnchorJobPost)
+
+`POST /api/cron/anchor`
+
+Same as GET, for pg_net callers
+
+# Run maintenance job (/api/openapi/jobs/runMaintenanceJob)
+
+`GET /api/cron/maintenance`
+
+Expire recovery locks, retry notifications, converge stuck payments
+
+# Run maintenance job post (/api/openapi/jobs/runMaintenanceJobPost)
+
+`POST /api/cron/maintenance`
+
+Same as GET, for pg_net callers
+
+# Get issuer key (/api/openapi/keys/getIssuerKey)
+
+`GET /.well-known/agentguard-key`
+
+Active issuer public key (legacy single-key form)
+
+# Get issuer key set (/api/openapi/keys/getIssuerKeySet)
+
+`GET /.well-known/agentguard-keys`
+
+Issuer key set: every key with kid, status, created_at, retired_at, compromised_at. Pin this.
+
+# Rotate issuer key (/api/openapi/keys/rotateIssuerKey)
+
+`POST /v1/keys/rotate`
+
+Retire the active issuer key and create a new one (audited)
+
+# Mark key compromised (/api/openapi/keys/markKeyCompromised)
+
+`POST /v1/keys/{kid}/compromised`
+
+Mark a key compromised as of `at` (rotates first if active)
+
+# Get public receipt (/api/openapi/receipts/getPublicReceipt)
+
+`GET /v1/public/receipts/{id}`
+
+Public receipt lookup (only when AGENTGUARD_PUBLIC_RECEIPTS=1)
+
+# Get payment receipt (/api/openapi/receipts/getPaymentReceipt)
+
+`GET /v1/payments/{id}/receipt`
+
+Receipt for a payment
+
+# List receipts (/api/openapi/receipts/listReceipts)
+
+`GET /v1/receipts`
+
+List receipts
+
+# Get receipt (/api/openapi/receipts/getReceipt)
+
+`GET /v1/receipts/{id}`
+
+Receipt by id
+
+# Register agent (/api/openapi/setup/registerAgent)
+
+`POST /v1/agents`
+
+Register an agent and return its API key (shown once)
+
+# Start wallet setup (/api/openapi/setup/startWalletSetup)
+
+`POST /v1/wallets/setup`
+
+Start PayPal wallet vaulting; returns the setup token with the buyer consent link
+
+# Complete wallet setup (/api/openapi/setup/completeWalletSetup)
+
+`GET /v1/wallets/return`
+
+PayPal redirect target after buyer consent; links the vaulted wallet
+
+# Link wallet (/api/openapi/setup/linkWallet)
+
+`POST /v1/wallets/link`
+
+Link an existing PayPal vault id to a user
+
+# List mandates (/api/openapi/mandates/listMandates)
+
+`GET /v1/mandates`
+
+List mandates with spend state and summary
+
+# Create mandate (/api/openapi/mandates/createMandate)
+
+`POST /v1/mandates`
+
+Create a draft mandate from structured constraints
+
+# Draft mandate from text (/api/openapi/mandates/draftMandateFromText)
+
+`POST /v1/mandates/draft-from-text`
+
+Draft a mandate from plain English (model proposes, deterministic parser bounds it)
+
+# Get mandate (/api/openapi/mandates/getMandate)
+
+`GET /v1/mandates/{id}`
+
+Mandate, status and spend
+
+# Get mandate signing options (/api/openapi/mandates/getMandateSigningOptions)
+
+`POST /v1/mandates/{id}/sign-request`
+
+Get WebAuthn options whose challenge is the mandate hash
+
+# Confirm mandate (/api/openapi/mandates/confirmMandate)
+
+`POST /v1/mandates/{id}/confirm`
+
+Activate a mandate with the user's passkey assertion
+
+# Get mandate revocation options (/api/openapi/mandates/getMandateRevocationOptions)
+
+`POST /v1/mandates/{id}/revoke-request`
+
+Get WebAuthn options for revocation
+
+# Revoke mandate (/api/openapi/mandates/revokeMandate)
+
+`POST /v1/mandates/{id}/revoke`
+
+Revoke with the user's passkey (drafts can be discarded without one)
+
+# Get user passkey (/api/openapi/passkeys/getUserPasskey)
+
+`GET /v1/users/{id}/passkey`
+
+Whether the user has a passkey, and its credential id
+
+# Create enrollment link (/api/openapi/passkeys/createEnrollmentLink)
+
+`POST /v1/users/{id}/enrollments`
+
+Issue a single-use enrollment link (15 min default)
+
+# Get passkey registration options (/api/openapi/passkeys/getEnrollmentOptions)
+
+`POST /v1/enroll/options`
+
+Redeem step 1: registration options for an enrollment token
+
+# Register a passkey (/api/openapi/passkeys/enrollPasskey)
+
+`POST /v1/enroll`
+
+Redeem step 2: register the passkey
+
+# Get reenrollment options (/api/openapi/passkeys/getReenrollmentOptions)
+
+`POST /v1/users/{id}/reenroll-request`
+
+Options for replacing a passkey with the current one
+
+# Reenroll passkey (/api/openapi/passkeys/reenrollPasskey)
+
+`POST /v1/users/{id}/reenroll`
+
+Mint a re-enrollment token authorized by the current passkey
+
+# Get recovery state (/api/openapi/passkeys/getRecoveryState)
+
+`GET /v1/users/{id}/recovery`
+
+Time-locked recovery state
+
+# Get recovery cancel options (/api/openapi/passkeys/getRecoveryCancelOptions)
+
+`POST /v1/users/{id}/recovery/cancel-request`
+
+Options to cancel a recovery with the current passkey
+
+# Cancel recovery (/api/openapi/passkeys/cancelRecovery)
+
+`POST /v1/users/{id}/recovery/cancel`
+
+Cancel a pending recovery
+
+# List approvals (/api/openapi/approvals/listApprovals)
+
+`GET /v1/approvals`
+
+Payments held for the owner
+
+# Get approval options (/api/openapi/approvals/getApprovalOptions)
+
+`POST /v1/approvals/{id}/request`
+
+Approval statement and WebAuthn options (5-minute nonce)
+
+# Resolve approval (/api/openapi/approvals/resolveApproval)
+
+`POST /v1/approvals/{id}`
+
+Approve or deny with the user's passkey. The admin token alone is refused.
+
+# Propose a payment (/api/openapi/agent/proposePayment)
+
+`POST /v1/agent/payments`
+
+Propose a payment (30/min per agent; 429 above)
+
+# Search products (/api/openapi/agent/searchProducts)
+
+`POST /v1/agent/products/search`
+
+Search the Channel3 product catalog within the mandate's currency and remaining budget (discovery only; never pays)
+
+# Get agent payment (/api/openapi/agent/getAgentPayment)
+
+`GET /v1/agent/payments/{id}`
+
+Payment status (the calling agent's own only)
+
+# Get agent payment receipt (/api/openapi/agent/getAgentPaymentReceipt)
+
+`GET /v1/agent/payments/{id}/receipt`
+
+Proof-of-Intent receipt for a captured payment
+
+# Get agent mandate (/api/openapi/agent/getAgentMandate)
+
+`GET /v1/agent/mandates/{id}`
+
+The agent's own mandate, status and spend
+
+# Search products for mandate (/api/openapi/catalog/searchProductsForMandate)
+
+`POST /v1/products/search`
+
+Owner view of the same Channel3 search, with an advisory mandate-fit check per product
+
+# Get product search status (/api/openapi/catalog/getProductSearchStatus)
+
+`GET /v1/products/status`
+
+Whether Channel3 product search is configured (CHANNEL3_API_KEY)
+
+# List payments (/api/openapi/payments/listPayments)
+
+`GET /v1/payments`
+
+List payments
+
+# List stuck payments (/api/openapi/payments/listStuckPayments)
+
+`GET /v1/payments/stuck`
+
+Payments in reserved/authorized older than a threshold
+
+# Recover payments (/api/openapi/payments/recoverPayments)
+
+`POST /v1/recover`
+
+Converge stuck payments with PayPal now
+
+# Get pause state (/api/openapi/control/getPauseState)
+
+`GET /v1/control/pause`
+
+Kill-switch state
+
+# Pause (/api/openapi/control/pause)
+
+`POST /v1/control/pause`
+
+Block every new proposal and approval (503)
+
+# Resume (/api/openapi/control/resume)
+
+`POST /v1/control/resume`
+
+Lift the kill-switch
+
+# List audit entries (/api/openapi/audit/listAuditEntries)
+
+`GET /v1/audit`
+
+Hash-chained audit log
+
+# Verify audit chain (/api/openapi/audit/verifyAuditChain)
+
+`GET /v1/audit/verify`
+
+Recompute and verify the whole chain
+
+# Get audit attestation (/api/openapi/audit/getAuditAttestation)
+
+`GET /v1/audit/attestation`
+
+Chain head signed with the active issuer key
+
+# Anchor audit chain (/api/openapi/audit/anchorAuditChain)
+
+`POST /v1/audit/anchor`
+
+Anchor the chain head now (RFC 6962 Merkle root, RFC 3161 stamped)
+
+# List audit anchors (/api/openapi/audit/listAuditAnchors)
+
+`GET /v1/audit/anchors`
+
+Published anchors; keep copies to detect forks

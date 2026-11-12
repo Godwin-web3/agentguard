@@ -1,0 +1,18 @@
+# Verify a receipt (/proof-of-intent)
+
+`getAgentPaymentReceipt` (agent) and `getReceipt` (owner) return a `ReceiptEnvelope`: the receipt body and an Ed25519 signature from the AgentGuard issuer key.
+
+The receipt binds together:
+
+- the user's mandate and the passkey (WebAuthn) signature over its hash,
+- the PayPal order snapshot AgentGuard evaluated and its digest,
+- the policy decision and every check it ran,
+- the PayPal capture id, plus RFC 3161 timestamps and the audit-chain anchor.
+
+Pin the issuer key set from `getIssuerKeySet` (`/.well-known/agentguard-keys`) and verify with `@agentguard-dev/intent-verifier`:
+
+```sh
+npx -p @agentguard-dev/intent-verifier intent-verify receipt.json --issuer-keys agentguard-keys.json
+```
+
+Any edit to the receipt (amount, payee, mandate limits, order) breaks the issuer signature.
